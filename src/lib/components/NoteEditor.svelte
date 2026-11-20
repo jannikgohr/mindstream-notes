@@ -71,6 +71,15 @@
   import { listen, TauriEventName } from '$lib/api/events';
   import { buildCrepe } from '$lib/editor/crepe-setup';
   import { minimalDocDiff } from '$lib/editor/doc-diff';
+  import {
+    retainUndoOnUnload,
+    takeRetainedUndo
+  } from '$lib/editor/retained-undo';
+  import {
+    captureProseMirrorUndo,
+    restoreProseMirrorUndo,
+    type ProseMirrorUndoJSON
+  } from '$lib/editor/prosemirror-undo-snapshot';
   import { seedDeterministicTemplate } from '$lib/editor/seed-template';
   import { insertMarkdownAtSelection } from '$lib/editor/insert-markdown';
   import { ensureDropIndicatorAlignment } from '$lib/editor/drop-indicator-align';
@@ -247,6 +256,7 @@
   // $state because we hand the instance to MobileEditorToolbar as a prop;
   // a plain `let` would make the child see a stale `null` after mount.
   let crepe: Crepe | null = $state(null);
+  let releaseUndo: (() => void) | null = null;
   let crepeReady = $state(false);
 
   /**
@@ -495,6 +505,8 @@
 
   onMount(async () => {
     if (!host) return;
+    const undoKey = `markdown:${noteId}`;
+    const retainedUndo = takeRetainedUndo<ProseMirrorUndoJSON>(undoKey);
     try {
       mobile = isMobile();
       viewMode = coerceViewMode(
@@ -778,6 +790,20 @@
       if (viewMode !== 'wysiwyg' && sourceEditor && getMarkdown) {
         sourceEditor.setText(getMarkdown());
       }
+
+      const savedUndo = await retainedUndo;
+      if (!host || !crepe) return;
+      crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const restore =
+          savedUndo && restoreProseMirrorUndo(view.state, savedUndo);
+        if (restore) view.dispatch(restore);
+      });
+      releaseUndo = retainUndoOnUnload(undoKey, () =>
+        crepe?.editor.action((ctx) =>
+          captureProseMirrorUndo(ctx.get(editorViewCtx).state)
+        )
+      );
 
       // Refresh source presence whenever a peer's cursor moves / they join or
       // leave. The refresh self-gates on the active surface and clears markers
@@ -1088,6 +1114,7 @@
   });
 
   onDestroy(() => {
+    releaseUndo?.();
     void saveScheduler.destroy();
     // Flush a final history version for edits made since the last capture,
     // while the editor (and getMarkdown) is still alive. Fire-and-forget —

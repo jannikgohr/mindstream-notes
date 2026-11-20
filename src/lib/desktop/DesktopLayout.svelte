@@ -40,7 +40,8 @@
     focusMainWindow,
     isKnownNoteKind,
     isTauri,
-    openNoteWindow
+    openNoteWindow,
+    takeCreatedNotes
   } from '$lib/api';
   import { clearSavedLayout, loadSavedLayout, saveLayout } from '$lib/api';
   import { onAppClose } from '$lib/editor/suspend-flush';
@@ -95,7 +96,7 @@
   let layoutReady = $state(false);
   let saveLayoutTimer: ReturnType<typeof setTimeout> | null = null;
   let layoutPersistenceReady = false;
-  let pendingTrayNoteId: string | null = null;
+  const pendingTrayNotes: string[] = [];
   let pointerDraggedPanel: IDockviewPanel | null = null;
   let pointerTabDropTarget: {
     group: DockviewGroupPanel;
@@ -334,11 +335,7 @@
 
     lastActiveGroup = dock.activeGroup ?? lastActiveGroup;
 
-    if (pendingTrayNoteId) {
-      const id = pendingTrayNoteId;
-      pendingTrayNoteId = null;
-      void openNote(id);
-    }
+    for (const id of pendingTrayNotes.splice(0)) void openNote(id);
 
     layoutReady = true;
 
@@ -637,8 +634,9 @@
   async function openTrayCreatedNote(id: string) {
     await loadTree();
     scheduleTrayCreateSync(id);
-    if (!dock) {
-      pendingTrayNoteId = id;
+    // Restoring the saved layout would replace a panel opened before it.
+    if (!layoutPersistenceReady) {
+      pendingTrayNotes.push(id);
       return;
     }
     await openNote(id);
@@ -829,9 +827,17 @@
     const unsub = subscribeOpenNoteRequest((id, { preview }) => {
       void openNote(id, { preview });
     });
-    const trayUnlisten = listen(TauriEventName.TrayNoteCreated, (payload) => {
-      void openTrayCreatedNote(payload.note_id);
+    // The note waits in Rust: this window may have been loading when it was
+    // made, as after the worker unloaded it.
+    const openCreatedNotes = () =>
+      takeCreatedNotes().then(
+        (ids) => ids.forEach((id) => void openTrayCreatedNote(id)),
+        (err) => console.warn('[tray] created notes unavailable', err)
+      );
+    const trayUnlisten = listen(TauriEventName.TrayNoteCreated, () => {
+      void openCreatedNotes();
     });
+    void trayUnlisten.then(openCreatedNotes, () => {});
     const showAppUnlisten = listen(TauriEventName.ShowApp, () => {
       void focusMainWindow();
     });

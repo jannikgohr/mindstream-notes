@@ -49,6 +49,7 @@ import {
   validTransform
 } from './stroke-transform';
 import { applyRedoOp, applyUndoOp } from './document-undo';
+import { bytesToBase64 } from '$lib/editor/base64';
 import {
   NO_SMOOTHING,
   smoothStroke,
@@ -97,6 +98,12 @@ export {
   type UndoOp
 } from './stroke-types';
 export { strokesHitAt } from './stroke-geometry';
+
+export interface InkUndoHistory {
+  stateVector: string;
+  undo: UndoOp[];
+  redo: UndoOp[];
+}
 
 export class InkDocument {
   readonly doc: Y.Doc;
@@ -864,6 +871,31 @@ export class InkDocument {
   resetUndoHistory(): void {
     this.undo.length = 0;
     this.redo.length = 0;
+  }
+
+  /**
+   * The undo and redo stacks, kept while the worker unloads the window (see
+   * `$lib/editor/retained-undo`). Null when both are empty.
+   */
+  captureUndoHistory(): InkUndoHistory | null {
+    if (this.undo.length + this.redo.length === 0) return null;
+    return {
+      stateVector: bytesToBase64(this.encodeStateVector()),
+      undo: [...this.undo],
+      redo: [...this.redo]
+    };
+  }
+
+  /**
+   * Take captured stacks back. Refused when the ink changed since, as
+   * `applyRemoteUpdate` drops them when a peer's edit lands.
+   */
+  restoreUndoHistory(saved: InkUndoHistory): boolean {
+    if (saved.stateVector !== bytesToBase64(this.encodeStateVector()))
+      return false;
+    this.undo.splice(0, this.undo.length, ...saved.undo);
+    this.redo.splice(0, this.redo.length, ...saved.redo);
+    return true;
   }
 
   private recordOp(op: UndoOp): void {

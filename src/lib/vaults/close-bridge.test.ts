@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   isMobile: vi.fn(() => false),
   flushBeforeAppClose: vi.fn(async () => {}),
   flushSettingsWrites: vi.fn(async () => {}),
+  handOverUndoHistories: vi.fn(async () => {}),
   pushToast: vi.fn(),
   freezeCloseInput: vi.fn()
 }));
@@ -22,6 +23,9 @@ vi.mock('$lib/platform', async (orig) => {
 });
 vi.mock('$lib/editor/suspend-flush', () => ({
   flushBeforeAppClose: mocks.flushBeforeAppClose
+}));
+vi.mock('$lib/editor/retained-undo', () => ({
+  handOverUndoHistories: mocks.handOverUndoHistories
 }));
 vi.mock('$lib/settings/store.svelte', () => ({
   flushSettingsWrites: mocks.flushSettingsWrites
@@ -142,6 +146,45 @@ describe('worker close bridge', () => {
     expect(mocks.flushSettingsWrites).toHaveBeenCalledTimes(1);
     stop();
     expect(frozen.restore).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands undo history over only when the window is unloaded, after saving', async () => {
+    const { send } = events();
+    const frozen = overlay();
+    installWorkerCloseBridge();
+    send('vault-worker-close', { id: 'quit', phase: 'prepare' });
+    await vi.waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('vault_window_close_ack', {
+        id: 'quit',
+        saved: true
+      })
+    );
+    expect(mocks.handOverUndoHistories).not.toHaveBeenCalled();
+
+    mocks.flushBeforeAppClose.mockImplementationOnce(async () => {
+      expect(mocks.handOverUndoHistories).not.toHaveBeenCalled();
+    });
+    send('vault-worker-close', {
+      id: 'unload',
+      phase: 'prepare',
+      reason: 'unload'
+    });
+    await vi.waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith('vault_window_close_ack', {
+        id: 'unload',
+        saved: true
+      })
+    );
+    expect(mocks.handOverUndoHistories).toHaveBeenCalledTimes(1);
+
+    // Shown again while it saved: the window stays, and says nothing.
+    send('vault-worker-close', {
+      id: 'unload',
+      phase: 'cancel',
+      reason: 'unload'
+    });
+    expect(frozen.restore).toHaveBeenCalled();
+    expect(mocks.pushToast).not.toHaveBeenCalled();
   });
 
   it('still flushes settings and reports an unsaved close when the editor flush fails', async () => {

@@ -145,7 +145,8 @@ export type TauriEvents = {
   'vault-worker-close': {
     id: string;
     phase: 'waiting' | 'prepare' | 'cancel';
-    reason?: 'background' | 'recovery';
+    /** `unload`: the worker frees a window that has been hidden for long. */
+    reason?: 'background' | 'recovery' | 'unload';
   };
 };
 

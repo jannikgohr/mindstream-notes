@@ -224,6 +224,44 @@ fail. A hidden `CollabProvider` sends no presence: it tells the room its
 cursor is gone and re-announces it when shown. Awareness would otherwise renew
 it every 15 seconds for each open shared note.
 
+### Unloading a window hidden for long
+
+An idle WebKitGTK page holds about 250 MB however little it shows, and 400 MB
+after some ink and editing, so no amount of trimming inside it gets a tray app
+under 100 MB. A main window hidden to the tray for 15 minutes, with no popout
+open (or 15 minutes after the last one closed), is therefore saved and destroyed (`worker_shutdown::unload_main_window`,
+timed from `webview_memory.rs`). The worker keeps the Rust sync and the change
+feed running; live Yjs collaboration lives in the page and stops with it.
+`tray::focus_main_window` builds the window again for anything that asks for
+it: the tray, a second launch, a shortcut, an invite link.
+
+Measured on Linux, 1,500 notes, 12 tabs, private memory of the whole tree:
+
+| state                      | coordinator | worker | WebKit |  total |
+| -------------------------- | ----------: | -----: | -----: | -----: |
+| hidden, after some editing |       20 MB |  57 MB | 411 MB | 490 MB |
+| unloaded                   |       20 MB |  39 MB |   8 MB |  68 MB |
+
+The worker drops below its visible size because it calls `malloc_trim` after
+the destroy; without it, glibc kept ~30 MB of the freed page and the total sat
+at ~100 MB. WebKit's network process stays (8 MB) and is not worth chasing.
+
+Traps:
+
+- Tauri raises `ExitRequested` when the last window goes. A worker answers that
+  by quitting the whole app, so it must not while unloaded (`lib.rs`).
+- A full quit while unloaded has no window to save; `Book::begin` accepts the
+  empty set only then.
+- The rebuilt page loads before its listeners exist. A note made from the tray
+  or a shortcut waits in `tray::CreatedNotes` until the window takes it.
+- Undo history survives through `$lib/editor/retained-undo`: before the
+  destroy each editor hands its history to Rust (in memory only), and a tab
+  takes it back when it mounts. Yjs undo needs the deleted content the stored
+  note has collected, so `yjs-undo-snapshot` carries the editor's document too.
+  Excalidraw's history cannot be exported, so a freeform tab loses its undo,
+  and a note left in Source view comes back in the default view without its
+  source-pane history, as a switch to WYSIWYG already does.
+
 ### Not holding spellcheck dictionaries the user is not using
 
 Hunspell tables are by far the largest thing the Rust process holds, and the
