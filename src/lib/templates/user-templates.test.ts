@@ -196,16 +196,22 @@ describe('createNoteFromUserTemplate', () => {
       body: '# Daily 2026-07-26\n\n2026-07-26'
     });
 
-    const id = await createNoteFromUserTemplate('src', 'col-1');
+    const id = await createNoteFromUserTemplate(
+      'src',
+      'col-1',
+      new Date('2026-07-26T08:00:00Z')
+    );
 
     expect(id).toBe('new-note');
-    // The raw note is handed to the plugin's renderTemplate export…
+    // The raw note is handed to the plugin's renderTemplate export, with the
+    // render date as `date`: the host overwrites a caller's `now`…
     expect(pluginsRunScript).toHaveBeenCalledWith(
       TEMPLATES_PLUGIN_ID,
       'renderTemplate',
       expect.objectContaining({
         title: 'Daily {{date}}',
-        body: '# {{title}}\n\n{{date}}'
+        body: '# {{title}}\n\n{{date}}',
+        date: '2026-07-26T08:00:00.000Z'
       })
     );
     // …and the app writes the plugin-rendered result.

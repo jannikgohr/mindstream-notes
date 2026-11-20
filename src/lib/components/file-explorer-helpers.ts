@@ -267,7 +267,7 @@ export function emptyStateMessageForSource(
       return 'Shared folders will appear here.';
     case 'trash':
       return 'Trash is empty.';
-    case 'home':
+    default:
       return emptyRootLabel;
   }
 }

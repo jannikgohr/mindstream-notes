@@ -97,7 +97,11 @@ fn resolve(inner: &str, input: &Value, vars: &Value) -> Result<String, String> {
     let mut value = if base == "uuid" {
         runtime::uuid()
     } else if let Some(default) = default {
-        let mut time = input["now"].as_str().unwrap_or_default().to_string();
+        let mut time = input["date"]
+            .as_str()
+            .or(input["now"].as_str())
+            .unwrap_or_default()
+            .to_string();
         for (count, unit) in offsets.into_iter().rev() {
             let count = count.parse::<i64>().map_err(|_| "invalid clock offset")?;
             let unit = match unit {

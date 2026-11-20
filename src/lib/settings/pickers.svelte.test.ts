@@ -15,6 +15,15 @@ const {
     collectionsById: {} as Record<
       string,
       { name: string; parent_collection_id: string | null }
+    >,
+    notesById: {} as Record<
+      string,
+      {
+        id: string;
+        title: string;
+        trashed: boolean;
+        parent_collection_id: string | null;
+      }
     >
   },
   allTagsInUse: vi.fn(() => [] as string[]),
@@ -35,6 +44,7 @@ vi.mock('$lib/plugins/registry.svelte', () => ({ pluginSettingsSections }));
 
 import {
   folderOptions,
+  noteOptions,
   startPickerSettingPruning,
   tagOptions
 } from './pickers.svelte';
@@ -47,6 +57,20 @@ beforeEach(() => {
     child: { name: 'Child', parent_collection_id: 'root' },
     trash: { name: 'Trash', parent_collection_id: null },
     gone: { name: 'Gone', parent_collection_id: 'trash' }
+  };
+  tree.notesById = {
+    live: {
+      id: 'live',
+      title: 'Daily',
+      trashed: false,
+      parent_collection_id: 'child'
+    },
+    binned: {
+      id: 'binned',
+      title: 'Old',
+      trashed: false,
+      parent_collection_id: 'gone'
+    }
   };
   allTagsInUse.mockReturnValue(['alpha', 'beta']);
   ALL_SETTINGS.length = 0;
@@ -66,6 +90,14 @@ describe('folderOptions', () => {
     expect(options.some((o) => o.value === 'gone')).toBe(false);
     // Sorted by path.
     expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)));
+  });
+});
+
+describe('noteOptions', () => {
+  it('lists notes outside the trash under their folder path', () => {
+    expect(noteOptions()).toEqual([
+      { value: 'live', label: 'Root / Child / Daily' }
+    ]);
   });
 });
 
@@ -113,6 +145,21 @@ describe('startPickerSettingPruning', () => {
       'plugins.com.x.live-tag',
       ''
     );
+    stop();
+  });
+
+  it('clears a note setting whose note went to the trash, keeps a live one', () => {
+    ALL_SETTINGS.push(
+      { id: 'binned-note', type: 'note' },
+      { id: 'live-note', type: 'note' }
+    );
+    getSettingValue.mockImplementation((id: string) =>
+      id === 'binned-note' ? 'binned' : 'live'
+    );
+    const stop = startPickerSettingPruning();
+    flushSync();
+    expect(setSettingValue).toHaveBeenCalledWith('binned-note', '');
+    expect(setSettingValue).not.toHaveBeenCalledWith('live-note', '');
     stop();
   });
 

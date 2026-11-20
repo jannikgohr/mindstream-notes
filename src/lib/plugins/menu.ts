@@ -17,6 +17,8 @@ import {
   renderPluginTemplate
 } from './templates';
 import { isScriptedRuntime } from './types';
+import { pushToast } from '$lib/components/toast.svelte';
+import { toErrorMessage } from '$lib/api/errors';
 import {
   createNoteFromUserTemplate,
   renderUserTemplateBody,
@@ -44,8 +46,8 @@ export function pluginTemplateEntries(): PluginTemplateEntry[] {
 }
 
 /**
- * Create + open a note from a template, swallowing failures with a console
- * error. Menu handlers are fire-and-forget, so this keeps a bad template from
+ * Create + open a note from a template, showing a failure as an error toast.
+ * Menu handlers are fire-and-forget, so this keeps a bad template from
  * throwing out of an onSelect and into the menu component.
  */
 export async function runPluginTemplate(
@@ -69,6 +71,7 @@ export async function runPluginTemplate(
       templateId,
       err
     );
+    pushToast(toErrorMessage(err), { variant: 'error' });
   }
 }
 
@@ -156,7 +159,7 @@ export async function renderTemplateEntryBody(
 
 /**
  * Create + open a note from a unified template entry (plugin or user),
- * swallowing failures like [`runPluginTemplate`] so a bad template never throws
+ * reporting failures like [`runPluginTemplate`] so a bad template never throws
  * out of a menu handler.
  */
 export async function runTemplateEntry(
@@ -175,5 +178,6 @@ export async function runTemplateEntry(
     }
   } catch (err) {
     console.error('[templates] note creation failed', entry, err);
+    pushToast(toErrorMessage(err), { variant: 'error' });
   }
 }

@@ -129,6 +129,7 @@ export const CONTRIBUTION_POINTS = {
   noteTemplates: null,
   noteExporters: null,
   toolbar: null,
+  sidebarViews: null,
   artifacts: 'pluginArtifacts.download',
   nativeTools: 'nativeTools.runDeclared',
   nativeServices: 'nativeServices.run',
@@ -365,10 +366,10 @@ export interface PluginSetting {
   /** Reuses the app's vault/device scope model. */
   scope: 'V' | 'D';
   /**
-   * Control kind. Besides the basic inputs, `folder` and `tag` are live pickers
-   * fed by the vault (the app's reusable picker primitives) — a plugin declares
-   * one and the app renders the picker + auto-clears it when the target is
-   * deleted; the stored value is a folder id / tag string.
+   * Control kind. Besides the basic inputs, `folder`, `tag` and `note` are
+   * live pickers fed by the vault (the app's reusable picker primitives) — a
+   * plugin declares one and the app renders the picker + auto-clears it when
+   * the target is deleted; the stored value is a folder id / tag / note id.
    */
   type:
     | 'toggle'
@@ -379,7 +380,8 @@ export interface PluginSetting {
     | 'color'
     | 'text'
     | 'folder'
-    | 'tag';
+    | 'tag'
+    | 'note';
   default?: unknown;
   /** Required for `select`/`radio`; option labels resolve via plugin i18n. */
   options?: string[];
@@ -414,13 +416,16 @@ export interface PluginWebviewPreviewContribution {
 /**
  * What a plugin command does. A closed union rather than an arbitrary callback:
  * the app maps each variant onto an app-owned handler, so a command can never
- * smuggle in executable behaviour. Only `createTemplateNote` exists in the MVP.
+ * smuggle in executable behaviour. `script` runs a backend export and performs
+ * the effect it returns, like a toolbar button.
  */
-export type PluginCommandAction = {
-  type: 'createTemplateNote';
-  /** Plugin-local template id this command creates a note from. */
-  templateId: string;
-};
+export type PluginCommandAction =
+  | {
+      type: 'createTemplateNote';
+      /** Plugin-local template id this command creates a note from. */
+      templateId: string;
+    }
+  | { type: 'script'; export: string };
 
 /** An app-local (never native/global) command a plugin contributes. */
 export interface PluginCommandContribution {
@@ -519,6 +524,43 @@ export interface PluginToolbarButton {
 }
 
 /**
+ * A view a plugin adds to the left sidebar's navigation, beside Home and
+ * Favourites. The host draws the nav entry and the action row; `render` says
+ * how the view's body is drawn.
+ */
+export interface PluginSidebarViewContribution {
+  /** Plugin-local slug; the app-wide id is `plugin.<pluginId>.<id>`. */
+  id: string;
+  labelKey: string;
+  /** Safe relative path to a bundled `.svg` icon (rendered themed via a mask). */
+  icon: string;
+  /** Buttons in the action row above the navigation. A click reaches the view by `id`. */
+  actions?: PluginSidebarViewAction[];
+  render: PluginSidebarViewRender;
+}
+
+export interface PluginSidebarViewAction {
+  /** Plugin-local slug, sent to the view on click. */
+  id: string;
+  labelKey: string;
+  icon: string;
+}
+
+/**
+ * How the host draws a sidebar view's body. `schema`: the host calls `render`
+ * with the view's state and draws the tree it returns from host components
+ * (see view-schema.ts); interactions call `onEvent`, which returns the next
+ * state and an effect.
+ */
+export type PluginSidebarViewRender = {
+  type: 'schema';
+  /** Export called as `render({ ...ctx, state })` → `{ state?, view }`. */
+  render: string;
+  /** Export called as `onEvent({ ...ctx, state, event, value? })` → `{ state?, effect? }`. */
+  onEvent: string;
+};
+
+/**
  * A declarative effect a plugin's backend script returns for the host to perform — the
  * plugin computes, the app acts (the runtime's "a script never writes" rule).
  * A closed union: the host executes only these, permission-gated. `openMenu`
@@ -541,7 +583,25 @@ export type PluginEffect =
       parentId?: string | null;
     }
   | { effect: 'insertMarkdown'; markdown: string }
-  | { effect: 'openMenu'; items: PluginEffectMenuItem[] };
+  | { effect: 'openMenu'; items: PluginEffectMenuItem[] }
+  /** `preview` opens it in a preview tab where the app has them. */
+  | { effect: 'openNote'; noteId: string; preview?: boolean }
+  | {
+      /**
+       * Open the live note titled `title` directly in `parentId`, or create
+       * it. The host decides against its own tree, one creation at a time per
+       * folder and title, so two quick calls never make two notes.
+       */
+      effect: 'openOrCreateNote';
+      title: string;
+      parentId?: string | null;
+      /** Render a new note from this note, as a user template. */
+      template?: {
+        sourceNoteId: string;
+        /** Local `YYYY-MM-DD` the template's date placeholders count from. */
+        date?: string;
+      };
+    };
 
 /** One item in an `openMenu` effect: a label plus the effect to run on select. */
 export interface PluginEffectMenuItem {
@@ -788,6 +848,7 @@ export interface PluginContributions {
   noteKinds?: PluginNoteKindContribution[];
   commands?: PluginCommandContribution[];
   textCheckers?: PluginTextCheckerContribution[];
+  sidebarViews?: PluginSidebarViewContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */

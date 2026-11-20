@@ -12,9 +12,9 @@ import { setTemplateFolder } from './template-sources';
  * The plugin framework, driven through the browser-fallback SPA.
  *
  * Outside Tauri there is no backend discovery, so `loadPlugins()` registers the
- * bundled Wasm plugins, **Templates** (`com.mindstream.templates.core`) and
- * **Typst** (`com.mindstream.typst`), from their manifests, and the page runs
- * their shipped components. That is enough to prove the whole frontend
+ * bundled Wasm plugins, **Journal** (`com.mindstream.journal`), **Templates**
+ * (`com.mindstream.templates.core`) and **Typst** (`com.mindstream.typst`),
+ * from their manifests, and the page runs their shipped components. That is enough to prove the whole frontend
  * integration the unit suites can only test in isolation:
  *
  *   - its `file-tree` toolbar contribution reaches the create bar
@@ -106,7 +106,9 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     await boot(page);
     const dialog = await openPluginsCategory(page);
 
-    await dialog.getByRole('button', { name: 'Plugin settings' }).click();
+    await pluginCard(dialog, 'Templates')
+      .getByRole('button', { name: 'Plugin settings' })
+      .click();
     // The plugin contributes a "Template sources" section with a folder setting.
     await expect(dialog.getByText('Template folder')).toBeVisible();
   });
@@ -122,9 +124,10 @@ test.describe('plugin framework — bundled Templates plugin', () => {
 
     // Disable → the contribution and the "Plugin settings" affordance vanish.
     const dialog = await openPluginsCategory(page);
-    await pluginCard(dialog, 'Templates').getByRole('switch', ENABLE).click();
+    const card = pluginCard(dialog, 'Templates');
+    await card.getByRole('switch', ENABLE).click();
     await expect(
-      dialog.getByRole('button', { name: 'Plugin settings' })
+      card.getByRole('button', { name: 'Plugin settings' })
     ).toBeHidden();
     await dialog.getByRole('button', { name: 'Close' }).click();
     await openFileTreeCreateMore(page);
@@ -239,5 +242,41 @@ test.describe('plugin framework — bundled Typst plugin', () => {
     expect(await readFile((await download.path())!, 'utf8')).toBe(
       '#set document(title: [Thesis])\n\n= Thesis\n\nStart writing in Typst here.'
     );
+  });
+});
+
+test.describe('plugin framework — bundled Journal plugin', () => {
+  test("opens today's daily note from its calendar", async ({ page }) => {
+    await boot(page);
+    const journal = page
+      .getByRole('navigation')
+      .getByRole('button', { name: 'Journal', exact: true });
+    await journal.click();
+    const view = page.locator('[data-plugin-view]');
+    const today = await page.evaluate(() => {
+      const d = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    });
+    await expect(
+      view.locator(`[data-bits-day][data-value="${today}"]`)
+    ).toHaveAttribute('data-selected', '');
+
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await expect(
+      page.getByRole('tab', { name: today, exact: true })
+    ).toHaveAttribute('aria-selected', 'true');
+    // The plugin redraws from the tree: the new note is listed and marked.
+    await expect(
+      view.getByRole('button', { name: today, exact: true })
+    ).toBeVisible();
+
+    // Clicking again opens the same note rather than a second one.
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await page
+      .getByRole('navigation')
+      .getByRole('button', { name: 'Home' })
+      .click();
+    await expect(treeItem(page, today)).toHaveCount(1);
   });
 });

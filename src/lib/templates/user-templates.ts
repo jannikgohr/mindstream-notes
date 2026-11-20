@@ -115,14 +115,18 @@ export function hasUserTemplates(): boolean {
  * plugin's component** (`renderTemplate` export) — the plugin owns the macro engine;
  * the app only feeds it the raw note and performs the resulting write. The title
  * is rendered first so the body can reference the final `{{title}}` (handled
- * inside the plugin).
+ * inside the plugin). `title` replaces the template note's own title.
+ *
+ * Date placeholders count from `now`. It goes to the plugin as `date` because
+ * the host overwrites any `now` the caller sends with the current time.
  */
 async function renderUserTemplate(
   templateNoteId: string,
-  now: Date
+  now: Date,
+  title?: string
 ): Promise<{ title: string; body: string }> {
   const summary = tree.notesById[templateNoteId];
-  const rawTitle = summary?.title ?? 'Untitled';
+  const rawTitle = title ?? summary?.title ?? 'Untitled';
   const full = await loadNote(templateNoteId);
 
   const rendered = (await runPluginScript(
@@ -131,7 +135,7 @@ async function renderUserTemplate(
     {
       title: rawTitle,
       body: full.body ?? '',
-      now: now.toISOString(),
+      date: now.toISOString(),
       locale: i18n.language
     }
   )) as { title?: unknown; body?: unknown } | null;
@@ -144,15 +148,15 @@ async function renderUserTemplate(
 
 /**
  * The rendered body of a user template, for inserting into an existing note
- * (the command palette's "Insert into note" action). Only the body is
- * returned — insertion drops content at the caret and never touches the host
- * note's title.
+ * (the command palette's "Insert into note" action) or filling a daily note.
+ * Only the body is returned; `title`, when given, is what `{{title}}` renders.
  */
 export async function renderUserTemplateBody(
   templateNoteId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  title?: string
 ): Promise<string> {
-  return (await renderUserTemplate(templateNoteId, now)).body;
+  return (await renderUserTemplate(templateNoteId, now, title)).body;
 }
 
 /**

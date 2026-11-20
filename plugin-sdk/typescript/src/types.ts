@@ -58,6 +58,8 @@ export interface TemplateInput extends Context {
   title?: string;
   body?: string;
   vars?: Record<string, unknown>;
+  /** ISO timestamp date placeholders count from, such as a daily note's day. Defaults to `now`. */
+  date?: string;
 }
 
 /**
@@ -80,7 +82,14 @@ export type Effect =
       parentId?: string | null;
     }
   | { effect: 'insertMarkdown'; markdown: string }
-  | { effect: 'openMenu'; items: MenuItem[] };
+  | { effect: 'openMenu'; items: MenuItem[] }
+  | { effect: 'openNote'; noteId: string; preview?: boolean }
+  | {
+      effect: 'openOrCreateNote';
+      title: string;
+      parentId?: string | null;
+      template?: { sourceNoteId: string; date?: string };
+    };
 
 /** One entry of an `openMenu` effect. */
 export interface MenuItem {

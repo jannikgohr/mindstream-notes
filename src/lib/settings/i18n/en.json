@@ -617,6 +617,8 @@
     "nav.shared": "Shared",
     "nav.favourite": "Favourites",
     "nav.trash": "Trash",
+    "calendar.previousMonth": "Previous month",
+    "calendar.nextMonth": "Next month",
     "fab.newNote": "New note",
     "fab.menu": "Create",
     "fab.showMenu": "Show everything you can create",

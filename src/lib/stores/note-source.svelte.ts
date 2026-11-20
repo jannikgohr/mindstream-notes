@@ -6,7 +6,13 @@ import {
   type TreeNode
 } from '$lib/api';
 
-export type DesktopNoteSource = 'home' | 'favourites' | 'shared' | 'trash';
+/** A core sidebar view, or a plugin's (see plugins/sidebar-views.ts). */
+export type DesktopNoteSource =
+  | 'home'
+  | 'favourites'
+  | 'shared'
+  | 'trash'
+  | `plugin:${string}`;
 
 interface DesktopNoteSourceState {
   active: DesktopNoteSource;
@@ -284,6 +290,8 @@ export function nodesForDesktopSource(
       return sharedRootNodes(sortedTree, collectionsById);
     case 'home':
       return personalTree(sortedTree, notesById, collectionsById);
+    default:
+      return [];
   }
 }
 

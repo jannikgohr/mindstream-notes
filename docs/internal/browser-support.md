@@ -280,7 +280,7 @@ the browser tests.
 ## Plugins
 
 The browser registers the bundled plugins whose manifest says
-`"runtime": "wasm"`, which today means Templates and Typst, and runs the same
+`"runtime": "wasm"`, which today means Journal, Templates and Typst, and runs the same
 `plugin.wasm` the app runs. `scripts/browser/plugin-components.mjs` is a Vite
 plugin that transpiles each component with jco when it is imported as
 `plugin.wasm?component`. Vitest uses it too, so the unit tests run the shipped

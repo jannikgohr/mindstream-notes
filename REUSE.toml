@@ -74,6 +74,7 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = [
   "plugins/languagetool/icons/spell-check.svg",
+  "plugins/journal/icons/*.svg",
   "plugins/templates/icons/templates.svg",
   "src-tauri/icons/tray/*.svg",
   "src-tauri/icons/tray/*.png",
