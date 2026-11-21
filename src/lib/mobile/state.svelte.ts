@@ -29,7 +29,13 @@ import {
 const DISPLAY_MODE_KEY = 'notes-app:mobile:displayMode';
 const LEGACY_FAVOURITES_KEY = 'notes-app:mobile:favourites';
 
-export type MobileScreen = 'home' | 'editor';
+export type MobileScreen = 'home' | 'editor' | 'view';
+
+/** A plugin's tab view, which a phone shows as a screen of its own. */
+export interface MobileTabView {
+  pluginId: string;
+  viewId: string;
+}
 
 /**
  * Bottom-nav buckets. Add a new entry here + a matching filter in
@@ -51,6 +57,8 @@ interface MobileBatchSelectionState {
 interface MobileState {
   screen: MobileScreen;
   view: MobileView;
+  /** The plugin view on the `view` screen. */
+  tabView: MobileTabView | null;
   /**
    * Folder the home/trash view is drilled into. null = the view's root.
    * Reset to null whenever the bottom-nav view switches so the user
@@ -72,6 +80,7 @@ function loadDisplayMode(): DisplayMode {
 export const mobileState = $state<MobileState>({
   screen: 'home',
   view: 'home',
+  tabView: null,
   currentFolderId: null,
   displayMode: loadDisplayMode(),
   fabExpanded: false
@@ -241,7 +250,8 @@ let overlayStack: NavOverlay[] = [];
 // a list of these, oldest → newest.
 type BaseSnapshot =
   | { screen: 'home'; view: MobileView; folderId: string | null }
-  | { screen: 'editor'; noteId: string };
+  | { screen: 'editor'; noteId: string }
+  | ({ screen: 'view' } & MobileTabView);
 
 // The base-level back-stack, oldest → newest: the states to restore as
 // the system back button walks backwards. `currentBase` is the live state
@@ -286,6 +296,12 @@ function restoreBase(snapshot: BaseSnapshot): void {
   if (snapshot.screen === 'editor') {
     setActiveNote(snapshot.noteId);
     setMobileScreen('editor');
+  } else if (snapshot.screen === 'view') {
+    mobileState.tabView = {
+      pluginId: snapshot.pluginId,
+      viewId: snapshot.viewId
+    };
+    setMobileScreen('view');
   } else {
     mobileState.view = snapshot.view;
     mobileState.currentFolderId = snapshot.folderId;
@@ -411,6 +427,21 @@ export function navigateToEditor(noteId: string) {
   clearMobileBatchSelection();
   setActiveNote(noteId);
   setMobileScreen('editor');
+}
+
+/** Show a plugin's tab view as a screen, with back leading out of it. */
+export function navigateToTabView(pluginId: string, viewId: string) {
+  const { screen, tabView } = mobileState;
+  if (
+    screen === 'view' &&
+    tabView?.pluginId === pluginId &&
+    tabView.viewId === viewId
+  )
+    return;
+  pushBase({ screen: 'view', pluginId, viewId });
+  clearMobileBatchSelection();
+  mobileState.tabView = { pluginId, viewId };
+  setMobileScreen('view');
 }
 
 /**

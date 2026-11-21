@@ -72,7 +72,25 @@ impl Graph<'_> {
     fn render(&self, place: Place) -> Result<Value, String> {
         let local = place == Place::Sidebar;
         let focus = self.focus();
-        let active = self.input["activeNoteId"].as_str();
+        // The sidebar draws around the open note or a clicked tag.
+        let centre = match (focus, place) {
+            (Some(focus), _) => Some(focus),
+            (None, Place::Sidebar) => match self.input["activeNoteId"].as_str() {
+                Some(active) => Some(active),
+                // Nothing to draw around, so no need to read the vault.
+                None => {
+                    return Ok(json!({
+                        "state": state(None),
+                        "view": {
+                            "type": "text",
+                            "tone": "muted",
+                            "text": { "key": "view.noActiveNote" },
+                        },
+                    }))
+                }
+            },
+            (None, Place::Tab) => None,
+        };
         let all = host(notes::all())?;
         let tags = self.setting("tags").as_bool() != Some(false);
 
@@ -103,13 +121,6 @@ impl Graph<'_> {
                 "on": { "event": "unfocus" },
             }));
         }
-        if focus.is_none() && local && active.is_none() {
-            children.push(json!({
-                "type": "text",
-                "tone": "muted",
-                "text": { "key": "view.noActiveNote" },
-            }));
-        }
         let mut graph = json!({
             "type": "graph",
             "nodes": nodes,
@@ -118,10 +129,8 @@ impl Graph<'_> {
             "orphans": self.setting("orphans").as_bool() != Some(false),
             "onSelect": "open",
         });
-        if let Some(focus) = focus {
-            graph["focus"] = json!(focus);
-        } else if local {
-            graph["focus"] = json!(active.unwrap_or_default());
+        if let Some(centre) = centre {
+            graph["focus"] = json!(centre);
         }
         children.push(graph);
 

@@ -693,9 +693,12 @@ the app restores with the layout and closes when the plugin is turned off.
 ```
 
 The tab keeps its own `state`, apart from any sidebar view's. While it is the
-active tab no note is open, so `activeNoteId` is `null`. Tabs are a desktop
-layout: a window without them, such as the mobile app, refuses `openTabView`
-with an error toast.
+active tab no note is open, so `activeNoteId` is `null`.
+
+The mobile app has no tabs. It shows a tab view as a screen of its own, with a
+back button, and lists every tab view beside the sort button above the notes.
+A window with neither, such as a popped-out note, refuses `openTabView` with an
+error toast.
 
 ## Webview previews (`render.webview`, `contributes.artifacts`)
 

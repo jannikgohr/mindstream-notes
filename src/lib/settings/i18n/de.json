@@ -451,6 +451,7 @@
     "calendar.nextMonth": "Nächster Monat",
     "graph.label": "Graph verknüpfter Notizen",
     "graph.empty": "Keine Notizen zum Anzeigen",
+    "graph.open": "Öffnen",
     "fab.newNote": "Neue Notiz",
     "fab.menu": "Erstellen",
     "fab.showMenu": "Alles anzeigen, was du erstellen kannst",

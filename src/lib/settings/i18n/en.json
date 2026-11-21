@@ -621,6 +621,7 @@
     "calendar.nextMonth": "Next month",
     "graph.label": "Graph of linked notes",
     "graph.empty": "No notes to show",
+    "graph.open": "Open",
     "fab.newNote": "New note",
     "fab.menu": "Create",
     "fab.showMenu": "Show everything you can create",
