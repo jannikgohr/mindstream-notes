@@ -120,9 +120,12 @@ storing recognized text, the search index, events, jobs and HTTP. The plugin
 owns policy: when to recognize, the prompt, building the request and parsing
 the reply. It ships as a bundled Rust plugin, "Handwriting recognition
 (OpenAI-compatible)", off by default, in the desktop, Android and browser
-apps. It reads pages after local edits, and after sync only pages that have
-no recognized text yet, so two devices do not both read a page just written
-on one of them.
+apps. When a job runs, its `prepare` skips pages without strokes and pages
+whose text matches their current strokes, whatever the event's origin, so the
+note change its own write causes costs nothing. Two devices with an active
+recognizer can both read a page edited on one of them before the first
+result syncs; avoiding that is best effort, and the user documentation says
+to turn recognition on in one place.
 
 The cursor and job tables and the queue rules (claiming, backoff, dedupe,
 limits) are in `storage-core`, which the browser also runs in its SQLite
@@ -145,11 +148,16 @@ A plugin subscribes in its manifest and needs `notes.watch`:
   `settleMs`, then delivers one event for the latest revision. Editor saves
   and sync writes settle the same way.
 - Delivery uses a durable cursor per plugin and vault, in the vault's local
-  database, and is at least once. Handlers must tolerate repeats. The cursor
-  follows a local change sequence that every note write path advances, sync
-  included; a write path that skips it silently loses events.
+  database, and is at least once. Handlers must tolerate repeats. Each note
+  row carries a change sequence number, set in the same transaction as every
+  note write, sync included; a write path that skips it silently loses
+  events. A migration numbers existing notes. The cursor only moves past
+  notes whose event was delivered, so a note still settling holds it back.
 - A new cursor starts at the beginning, so enabling a plugin delivers every
-  existing note of its kinds.
+  existing note of its kinds. The host also resets the cursor when one of
+  the plugin's settings changes or it becomes the active recognizer, so
+  notes skipped while it was unconfigured or inactive are delivered again.
+  A reset discards the cursor commit of any delivery already in flight.
 - Trashing or deleting a note sends no event.
 - When a handler fails with `queue-full`, the cursor stays put and the event
   is delivered again once the queue has room. A large backlog is read in
@@ -178,8 +186,15 @@ Rules:
   A running job finishes; the host's own checks reject a result that went
   stale meanwhile.
 - One job runs at a time per plugin.
-- Network errors, 5xx, 408 and 429 are retried after 1, 5 and 30 minutes.
-  Any other 4xx fails at once.
+- A job is done when its continuation returns. A guest error or trap in
+  `prepare` or the continuation fails the job at once, with the error shown
+  under Background work. A job left running when the app quit or the vault
+  closed runs again when the vault next opens.
+- The host retries network errors, 5xx, 408 and 429 after 1, 5 and 30
+  minutes. The continuation is called once per attempt sequence, with the
+  first response that is not retried or the error that ended the retries,
+  and fails the job by returning an error. A job replayed after the app quit
+  can reach its continuation again.
 - Each plugin may have 10,000 jobs and 16 MiB of payload queued per vault.
   Failed jobs count toward the limit, and only the newest 100 failures are
   kept. Queuing past a limit fails with `queue-full`.
@@ -205,10 +220,16 @@ and to one kind of destination. It needs `network.settingOrigin`:
 "network": { "destinations": [{ "setting": "endpoint" }] }
 ```
 
+- The destination setting must have `scope: "D"` and no default, so only
+  the user of this device chooses where requests go, by typing the URL or
+  restoring their own backup. A synced or shared vault cannot redirect
+  requests, and plugins cannot write settings. Until it is set, requests
+  fail with "server URL not set".
 - A request has a method (`GET` or `POST`), a URL, `content-type` and
-  `accept` headers, headers filled from a setting
+  `accept` headers, headers filled from one of the plugin's own settings
   (`{ "header": "authorization", "fromSetting": "apiKey", "prefix": "Bearer " }`),
-  a body of at most 32 MiB and a timeout of at most 300 s.
+  a UTF-8 body of at most 8 MiB and a timeout of at most 300 s. The body
+  crosses the guest boundary as a string, inside the guest's memory limit.
 - The response has a status, bounded headers and a body of at most 1 MiB.
   HTTP error statuses are responses. Destination, timeout, size and transport
   failures are distinct errors.
@@ -216,6 +237,10 @@ and to one kind of destination. It needs `network.settingOrigin`:
   sent, not when it was queued. Otherwise the job fails with "server URL
   changed".
 - No redirects, no cookies, no app credentials.
+- The check is on the origin only. Neither host restricts the addresses a
+  name resolves to: the user picks the server, and LAN servers are the
+  common case. The DNS and connection rules of the general proposal apply
+  to manifest-declared destinations, not to this form.
 - The native host sends requests with `reqwest`, for the reasons in
   [plugin host internals](plugin-host.md#design-notes). The browser host uses
   `fetch` and so is subject to CORS, mixed-content blocking and Chrome's Local
@@ -228,9 +253,12 @@ and to one kind of destination. It needs `network.settingOrigin`:
 
 A new plugin setting type, available to every plugin:
 
-- `type: "secret"` is valid only with `scope: "D"`, so it never syncs and
-  stays out of vault backups.
-- The settings UI masks it, with show/hide and Clear.
+- `type: "secret"` is valid only with `scope: "D"`, so it never syncs.
+  Backups leave secret values out, unlike other device settings, and a
+  restore ignores any it finds.
+- The settings UI masks it, with show/hide and Clear. Removing a plugin
+  deletes its secret values, though it keeps its other settings, because a
+  removed plugin's settings have no UI to clear them from.
 - Plugin calls receive only whether it is set, never the value. The host
   inserts it through `fromSetting` in a job request or through a text
   checker's `apiKeySetting`. LanguageTool's `api-key`, already device-scoped,
@@ -244,21 +272,32 @@ A new plugin setting type, available to every plugin:
 Two permissions: `ink.read` and `ink.writeRecognizedText`.
 
 - `ink.pages(note)` lists each page with its stroke signature, computed by the
-  host, and its recognized entry, if any.
-- `ink.render-page(note, page)` returns PNG bytes drawn by one fixed recipe:
+  host, and its recognized entry, if any, and says whether this account may
+  edit the note, so `prepare` can skip shared notes it could not write to.
+- `ink.render-page(note, page)` returns PNG bytes drawn by one fixed recipe,
   strokes only, cropped to their bounds with 24 px padding, on white, at most
-  1600 px per side. The plugin sees the image; options wait for a second user.
-- `ink.set-recognized-text(note, page, signature, text)` fails with `stale`
-  when the page's strokes no longer match `signature`, and with
-  `not-active-recognizer` for any plugin but the vault's chosen one.
+  1600 px per side, and the signature of the strokes it drew. The plugin
+  stores text under that signature, not one from an earlier `ink.pages`. It
+  sees the image; options wait for a second user.
+- `ink.set-recognized-text(note, page, signature, text)` checks the signature
+  in the transaction that writes. It fails with `stale` when the page's
+  strokes no longer match, with `not-active-recognizer` for any plugin but
+  the chosen one, and with `read-only` for a shared note this account may
+  not edit.
 
 Recognized text lives in the note's `ink:handwriting` map: page ID to text,
 stroke signature and the plugin that wrote it. It syncs and stays outside
 undo. The host prunes entries for pages that were deleted or have no strokes.
-With more than one recognizer enabled, the user picks the active one in
-settings. Disabling the active one clears the choice, and if exactly one
-other recognizer is enabled it takes over. Recognized text stays in notes when
-a plugin is disabled or removed, because it is note content.
+
+A recognizer is a plugin granted `ink.writeRecognizedText`. Each vault has
+at most one active recognizer on each device; like plugin settings, the
+choice does not sync. Settings → Search shows the choice, including none,
+whenever a recognizer is enabled. Enabling a recognizer while none is
+active makes it active. Disabling the active one clears the choice, and if
+exactly one other recognizer is enabled it takes over.
+`ink.is-active-recognizer()` lets `prepare` skip the request when the result
+could not be stored. Recognized text stays in notes when a plugin is disabled
+or removed, because it is note content.
 
 The stroke decoder, renderer and signature are Rust in a crate both hosts
 build, with tiny-skia and a PNG encoder, so both send the same image for the
@@ -270,8 +309,11 @@ Search reuses the ink index in `notes.pdf_text`. Its staleness signature,
 `ink_background_signature` in Rust and `backgroundSignature` in TypeScript,
 also covers recognized pages, and a test in each language asserts the same
 string. Rust cannot rebuild that text alone, because PDF background text comes
-from pdf.js, so after a write the host emits `index-stale` and the existing
-TypeScript sweep re-indexes the note.
+from pdf.js. A write clears the note's cached text through the existing
+signature check, and the host emits `index-stale`, which wakes the
+TypeScript sweep in either host, since the sweep otherwise runs only at
+startup and after sync. Outdated text stays indexed until it is read again;
+it still finds the note, and the sheet below marks it.
 
 An open ink editor is not told about host writes. That is safe: ink saves
 merge into the stored state rather than replace it, and the editor does not
@@ -282,8 +324,12 @@ Ways to see and undo the state:
 - The ink note menu gets "Recognized text", a read-only sheet with each page's
   text and whether it is current, outdated or not read yet.
 - Settings → Search gets "Remove recognized text", which says how many notes
-  it touches, deletes `ink:handwriting` from every ink note in the vault as a
-  synced edit, and clears the active recognizer so the text does not return.
+  it touches, deletes `ink:handwriting` from every ink note in the vault this
+  account can edit as a synced edit, and clears this device's active
+  recognizer so the text does not return until the user picks one again. It
+  reports shared notes it could not edit. Another device with an active
+  recognizer reads the pages again, including results it finishes offline,
+  and the confirmation says so.
 
 ## What other systems do
 
