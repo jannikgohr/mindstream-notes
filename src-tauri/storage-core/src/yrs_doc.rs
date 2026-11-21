@@ -21,8 +21,8 @@ use similar::{ChangeTag, TextDiff};
 use yrs::types::Attrs;
 use yrs::updates::decoder::Decode;
 use yrs::{
-    Any, Doc, GetString, Map, Out, ReadTxn, StateVector, Text, Transact, Update, Xml, XmlFragment,
-    XmlOut,
+    Any, Array, Doc, GetString, Map, Out, ReadTxn, StateVector, Text, Transact, Update, Xml,
+    XmlFragment, XmlOut,
 };
 
 const TEXT_KEY: &str = "body";
@@ -85,6 +85,170 @@ pub fn ink_background_signature(state: &[u8]) -> String {
             .collect::<Vec<_>>(),
     )
     .unwrap_or_else(|_| "[]".into())
+}
+
+pub struct InkPage {
+    pub id: String,
+    /// In page coordinates.
+    pub strokes: Vec<mindstream_ink::Stroke>,
+}
+
+const INK_PAGE_GAP: f64 = 72.0;
+const INK_A4: (f64, f64) = (1190.0, 1684.0);
+
+/// The visible pages of an ink note and the strokes on each, as the editor's
+/// `InkDocument.pages()` and `pageStrokes()` read them. Notes from before
+/// pages were stored get A4 pages, at least two and one past the last stroke,
+/// and a stroke shows on every page its bounds reach.
+pub fn ink_pages(state: &[u8]) -> Vec<InkPage> {
+    let doc = load(state);
+    let records = doc.get_or_insert_map("ink:pages");
+    let order = doc.get_or_insert_map("ink:pageOrder");
+    let deleted = doc.get_or_insert_map("ink:deletedPages");
+    let strokes = doc.get_or_insert_array("strokes");
+    let txn = doc.transact();
+
+    // The editor keys strokes by id: a repeated id keeps its first position
+    // and its last value.
+    let mut latest: Vec<yrs::MapRef> = Vec::new();
+    let mut positions = std::collections::HashMap::new();
+    for value in strokes.iter(&txn) {
+        let Out::YMap(map) = value else { continue };
+        let Some(Out::Any(Any::String(id))) = map.get(&txn, "id") else {
+            continue;
+        };
+        match positions.get(&id) {
+            Some(&at) => latest[at] = map,
+            None => {
+                positions.insert(id, latest.len());
+                latest.push(map);
+            }
+        }
+    }
+    let visible: Vec<(Option<String>, mindstream_ink::Stroke)> = latest
+        .into_iter()
+        .filter_map(|map| {
+            if matches!(map.get(&txn, "tombstoned"), Some(Out::Any(Any::Bool(true)))) {
+                return None;
+            }
+            let Some(Out::Any(Any::Buffer(payload))) = map.get(&txn, "payload") else {
+                return None;
+            };
+            let owner = match map.get(&txn, "pageId") {
+                Some(Out::Any(Any::String(id))) => Some(id.to_string()),
+                _ => None,
+            };
+            Some((owner, mindstream_ink::decode_payload(&payload)?))
+        })
+        .collect();
+
+    let mut pages: Vec<(f64, String, f64, f64)> = Vec::new();
+    for (_, value) in records.iter(&txn) {
+        let Out::Any(Any::Map(page)) = value else {
+            continue;
+        };
+        let (Some(Any::String(id)), Some(Any::Number(width)), Some(Any::Number(height))) =
+            (page.get("id"), page.get("width"), page.get("height"))
+        else {
+            continue;
+        };
+        let valid = |n: &f64| n.is_finite() && *n > 0.0;
+        if !valid(width)
+            || !valid(height)
+            || matches!(deleted.get(&txn, id), Some(Out::Any(Any::Bool(true))))
+        {
+            continue;
+        }
+        let rank = match order.get(&txn, id) {
+            Some(Out::Any(Any::Number(n))) => n,
+            _ => 0.0,
+        };
+        pages.push((rank, id.to_string(), *width, *height));
+    }
+    pages.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut pages: Vec<(String, f64, f64)> =
+        pages.into_iter().map(|(_, id, w, h)| (id, w, h)).collect();
+
+    // Strokes owned by a page are stored in its coordinates, the rest in
+    // document coordinates. A stroke owned by a missing page is hidden.
+    let known = |owner: &Option<String>| match owner {
+        Some(id) => pages.iter().any(|(page, _, _)| page == id),
+        None => true,
+    };
+    let visible: Vec<_> = visible
+        .into_iter()
+        .filter(|(owner, _)| known(owner))
+        .collect();
+    if records.len(&txn) == 0 {
+        let max_y = visible
+            .iter()
+            .flat_map(|(_, stroke)| stroke.points.iter().map(|p| p.y as f64))
+            .fold(0.0, f64::max);
+        let count = if max_y.is_finite() && max_y > 0.0 {
+            ((max_y / (INK_A4.1 + INK_PAGE_GAP)).floor() as usize + 2).max(2)
+        } else {
+            2
+        };
+        pages = (0..count)
+            .map(|i| (format!("legacy-page-{i}"), INK_A4.0, INK_A4.1))
+            .collect();
+    }
+
+    let layout_width = pages.iter().map(|p| p.1).fold(1.0, f64::max);
+    let mut top = 0.0;
+    pages
+        .iter()
+        .map(|(id, width, height)| {
+            let left = (layout_width - width) / 2.0;
+            let rect = (left, top, left + width, top + height);
+            top += height + INK_PAGE_GAP;
+            let strokes = visible
+                .iter()
+                .filter_map(|(owner, stroke)| match owner {
+                    Some(owner) => (owner == id).then(|| stroke.clone()),
+                    None => {
+                        let (x0, y0, x1, y1) = point_bounds(&stroke.points);
+                        let reaches = x1 >= rect.0 && x0 <= rect.2 && y1 >= rect.1 && y0 <= rect.3;
+                        reaches.then(|| mindstream_ink::Stroke {
+                            points: stroke
+                                .points
+                                .iter()
+                                .map(|p| mindstream_ink::Point {
+                                    x: (p.x as f64 - rect.0) as f32,
+                                    y: (p.y as f64 - rect.1) as f32,
+                                    pressure: p.pressure,
+                                })
+                                .collect(),
+                            ..stroke.clone()
+                        })
+                    }
+                })
+                .collect();
+            InkPage {
+                id: id.clone(),
+                strokes,
+            }
+        })
+        .collect()
+}
+
+/// `boundsOfPoints` in the editor: zero bounds for a stroke without points.
+fn point_bounds(points: &[mindstream_ink::Point]) -> (f64, f64, f64, f64) {
+    if points.is_empty() {
+        return (0.0, 0.0, 0.0, 0.0);
+    }
+    points.iter().fold(
+        (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ),
+        |(x0, y0, x1, y1), p| {
+            let (x, y) = (p.x as f64, p.y as f64);
+            (x0.min(x), y0.min(y), x1.max(x), y1.max(y))
+        },
+    )
 }
 
 /// First-time state for a brand-new note. The yrs Doc is initialised by
@@ -695,6 +859,9 @@ mod tests {
 
 #[cfg(test)]
 mod asset_id_tests;
+
+#[cfg(test)]
+mod ink_pages_tests;
 
 /// An editor document (y-prosemirror) holding one paragraph, for tests
 /// outside this module that need a v2 state. The client id is fixed, as it
