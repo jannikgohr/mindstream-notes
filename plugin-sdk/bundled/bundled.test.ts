@@ -372,11 +372,16 @@ describe('Graph component', { timeout: 60_000 }, () => {
     });
     expect(local.state).toEqual({});
     expect(local.view.children).toMatchObject([{ type: 'graph', focus: 'b' }]);
-    const none = await plugin.call<Rendered>('render', { state: local.state });
-    expect(none.view.children).toMatchObject([
-      { type: 'text', text: { key: 'view.noActiveNote' } },
-      { type: 'graph', focus: '' }
-    ]);
+    // With no note open there is nothing to draw, and the vault isn't read.
+    const blind = await graph({ permissions: [] });
+    await expect(
+      blind.call('render', { state: null, activeNoteId: 'b' })
+    ).rejects.toThrow();
+    const none = await blind.call<Rendered>('render', { state: null });
+    expect(none.view).toMatchObject({
+      type: 'text',
+      text: { key: 'view.noActiveNote' }
+    });
   });
 
   it('narrows to a clicked tag, opens a clicked note and opens its tab', async () => {

@@ -2,16 +2,36 @@
   /**
    * Note-view controls beside the breadcrumb: the sort menu and the
    * list/grid switch, as ghost icons like the desktop file-tree header, so
-   * the breadcrumb and the controls share one row above the list.
+   * the breadcrumb and the controls share one row above the list. Plugin
+   * tab views, which have no tab bar to live in here, open from this row too.
    */
   import { LayoutGrid, List } from '@lucide/svelte';
   import SortControl from '$lib/components/SortControl.svelte';
   import { setSortDirection, setSortStrategy, ui } from '$lib/state.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
-  import { mobileState, setDisplayMode } from './state.svelte';
+  import PluginIcon from '$lib/plugins/PluginIcon.svelte';
+  import { resolvePluginString } from '$lib/plugins/plugin-i18n';
+  import { pluginTabViews } from '$lib/plugins/registry.svelte';
+  import {
+    mobileState,
+    navigateToTabView,
+    setDisplayMode
+  } from './state.svelte';
 </script>
 
 <div class="touch-targets flex shrink-0 items-center gap-1">
+  {#each pluginTabViews() as { pluginId, view } (`${pluginId}:${view.id}`)}
+    {@const label = resolvePluginString(pluginId, view.labelKey)}
+    <button
+      type="button"
+      class="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
+      onclick={() => navigateToTabView(pluginId, view.id)}
+      aria-label={label}
+      title={label}
+    >
+      <PluginIcon {pluginId} file={view.icon} class="size-4" />
+    </button>
+  {/each}
   <SortControl
     strategy={ui.sortStrategy}
     direction={ui.sortDirection}

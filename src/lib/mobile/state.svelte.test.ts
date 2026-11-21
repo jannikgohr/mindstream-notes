@@ -32,6 +32,7 @@ import {
   mobileState,
   navigateBack,
   navigateToEditor,
+  navigateToTabView,
   openNavOverlay,
   setCurrentFolder,
   setMobileBatchSelection,
@@ -53,6 +54,7 @@ beforeEach(() => {
   localStorage.clear();
   mobileState.screen = 'home';
   mobileState.view = 'home';
+  mobileState.tabView = null;
   mobileState.currentFolderId = null;
   mobileState.fabExpanded = false;
   clearMobileBatchSelection();
@@ -254,6 +256,26 @@ describe('history navigation', () => {
     expect(mobileState.screen).toBe('editor');
 
     // …and only the final pop returns to the note list.
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('home');
+    cleanup();
+  });
+
+  it('returns from a note to the plugin view it was opened from', () => {
+    const cleanup = installMobileHistoryNav();
+    navigateToTabView('p', 'graph');
+    expect(mobileState.screen).toBe('view');
+    expect(mobileState.tabView).toEqual({ pluginId: 'p', viewId: 'graph' });
+    // Asking for the view it already shows adds no step to go back through.
+    pushState.mockClear();
+    navigateToTabView('p', 'graph');
+    expect(pushState).not.toHaveBeenCalled();
+
+    navigateToEditor('n1');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(mobileState.screen).toBe('view');
+    expect(mobileState.tabView).toEqual({ pluginId: 'p', viewId: 'graph' });
+
     window.dispatchEvent(new PopStateEvent('popstate'));
     expect(mobileState.screen).toBe('home');
     cleanup();
