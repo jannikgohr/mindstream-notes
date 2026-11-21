@@ -3,13 +3,24 @@
    * The `graph` node of a schema view: notes as a force-directed graph of
    * their links, on a canvas. Drag a note to move it, drag the background to
    * pan, scroll to zoom, click a note to send `onSelect`. The layout runs in
-   * a worker (see graph-layout.worker.ts); this side only draws.
+   * a worker (see graph-layout.worker.ts); this side only draws: links and
+   * nodes with WebGL (see graph-renderer.ts), labels on a 2D canvas above.
+   * Without WebGL the 2D canvas draws everything.
    */
   import { untrack } from 'svelte';
   import { loadNoteLinks } from '$lib/notes/note-relations';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { startLayoutWorker, type LayoutPositions } from './graph-layout';
+  import {
+    createGraphRenderer,
+    NODE_ACCENT,
+    NODE_LIT,
+    NODE_RING,
+    PALETTE_SIZE,
+    rgba,
+    type GraphRenderer
+  } from './graph-renderer';
   import { adjacency, visibleGraph } from './schema-graph';
   import type { ViewNode } from './view-schema';
 
@@ -42,6 +53,11 @@
   const DOT_PX = 3;
 
   let canvas = $state<HTMLCanvasElement>();
+  let glCanvas = $state<HTMLCanvasElement>();
+  let renderer: GraphRenderer | null = null;
+  // The renderer still holds the layout before this one, until this one's
+  // first positions arrive: new nodes have no place to be drawn at yet.
+  let sceneStale = true;
   let width = $state(0);
   let height = $state(0);
   let outgoing = $state(new Map<string, string[]>());
@@ -76,6 +92,55 @@
 
   const layout = startLayoutWorker(onPositions);
 
+  $effect(() => {
+    if (!glCanvas) return;
+    const el = glCanvas;
+    const made = createGraphRenderer(el);
+    renderer = made;
+    sceneStale = true;
+    // A lost context draws nothing more: carry on in 2D.
+    const onLost = () => {
+      renderer = null;
+      schedule();
+    };
+    el.addEventListener('webglcontextlost', onLost);
+    return () => {
+      el.removeEventListener('webglcontextlost', onLost);
+      renderer = null;
+      made?.destroy();
+    };
+  });
+
+  /** Each node's colour and whether it is a ring, lit or the accent. */
+  function nodeStyles(): Uint8Array {
+    const focus =
+      node.focus === undefined ? -1 : (indexOf.get(node.focus) ?? -1);
+    const lit = hovered >= 0 ? neighbours.get(ids[hovered]) : undefined;
+    const styles = new Uint8Array(ids.length * 2);
+    for (let i = 0; i < ids.length; i++) {
+      styles[2 * i] = colour[i] === MUTED ? PALETTE_SIZE - 2 : colour[i];
+      styles[2 * i + 1] =
+        (other[i] ? NODE_RING : 0) |
+        (lit?.has(ids[i]) ? NODE_LIT : 0) |
+        (i === focus || i === hovered ? NODE_ACCENT : 0);
+    }
+    return styles;
+  }
+
+  /** Tell the renderer which node is hovered. */
+  function showHover() {
+    if (!renderer || sceneStale) return;
+    renderer.setStyles(nodeStyles());
+    const lit: number[] = [];
+    if (hovered >= 0) {
+      for (let p = 0; p < pairs.length; p += 2) {
+        if (pairs[p] === hovered || pairs[p + 1] === hovered)
+          lit.push(pairs[p], pairs[p + 1]);
+      }
+    }
+    renderer.setLitLinks(Uint32Array.from(lit));
+  }
+
   /** A group's colour from its name, so it is the same in every view. */
   function groupColour(group: string): number {
     let hash = 0;
@@ -88,6 +153,14 @@
     if (positions.version !== version) return;
     xs = positions.x;
     ys = positions.y;
+    if (renderer) {
+      if (sceneStale) {
+        renderer.setScene({ links: pairs, radius, styles: nodeStyles() });
+        sceneStale = false;
+        showHover();
+      }
+      renderer.setPositions(xs, ys);
+    }
     fit();
     schedule();
   }
@@ -186,6 +259,7 @@
       (a, b) => radius[b] - radius[a]
     );
     hovered = -1;
+    sceneStale = true;
     empty = n === 0;
     shownNodes = n;
     shownLinks = graph.links.length;
@@ -237,6 +311,10 @@
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
+    if (glCanvas) {
+      glCanvas.width = canvas.width;
+      glCanvas.height = canvas.height;
+    }
     untrack(fit);
     schedule();
   });
@@ -290,6 +368,26 @@
     const { k } = camera;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Fainter the more links there are, or a dense graph is one grey slab.
+    const linkAlpha =
+      (hovered >= 0 ? 0.15 : 0.6) *
+      Math.min(1, Math.sqrt(20000 / Math.max(pairs.length / 2, 1)));
+    if (renderer) {
+      const palette = new Float32Array(PALETTE_SIZE * 4);
+      [...fills, muted, accent].forEach((c, i) => palette.set(rgba(c), i * 4));
+      renderer.draw({
+        width,
+        height,
+        ratio,
+        x: camera.x,
+        y: camera.y,
+        k,
+        palette,
+        link: rgba(token('--border-strong'), linkAlpha),
+        litLink: rgba(accent, 0.9),
+        dimOthers: hovered >= 0
+      });
+    }
     ctx.setTransform(
       ratio * k,
       0,
@@ -314,93 +412,95 @@
     const lit = hovered >= 0 ? neighbours.get(ids[hovered]) : undefined;
     const isLit = (i: number) => i === hovered || (lit?.has(ids[i]) ?? false);
 
-    // Links, in one path: one stroke for all of them is what keeps a big
-    // graph fast. The hovered note's links go on top in the accent colour.
-    ctx.lineWidth = 1 / k;
-    ctx.strokeStyle = token('--border-strong');
-    ctx.globalAlpha = lit ? 0.15 : 0.6;
-    ctx.beginPath();
-    const litLinks: number[] = [];
-    for (let p = 0; p < pairs.length; p += 2) {
-      const a = pairs[p];
-      const b = pairs[p + 1];
-      if (Number.isNaN(xs[a]) || Number.isNaN(xs[b])) continue;
-      if (
-        (xs[a] < left && xs[b] < left) ||
-        (xs[a] > right && xs[b] > right) ||
-        (ys[a] < top && ys[b] < top) ||
-        (ys[a] > bottom && ys[b] > bottom)
-      )
-        continue;
-      if (hovered >= 0 && (a === hovered || b === hovered)) {
-        litLinks.push(a, b);
-        continue;
-      }
-      ctx.moveTo(xs[a], ys[a]);
-      ctx.lineTo(xs[b], ys[b]);
-    }
-    ctx.stroke();
-    if (litLinks.length) {
-      ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = accent;
+    if (!renderer) {
+      // Links, in one path: one stroke for all of them is what keeps a big
+      // graph fast. The hovered note's links go on top in the accent colour.
+      ctx.lineWidth = 1 / k;
+      ctx.strokeStyle = token('--border-strong');
+      ctx.globalAlpha = linkAlpha;
       ctx.beginPath();
-      for (let p = 0; p < litLinks.length; p += 2) {
-        ctx.moveTo(xs[litLinks[p]], ys[litLinks[p]]);
-        ctx.lineTo(xs[litLinks[p + 1]], ys[litLinks[p + 1]]);
+      const litLinks: number[] = [];
+      for (let p = 0; p < pairs.length; p += 2) {
+        const a = pairs[p];
+        const b = pairs[p + 1];
+        if (Number.isNaN(xs[a]) || Number.isNaN(xs[b])) continue;
+        if (
+          (xs[a] < left && xs[b] < left) ||
+          (xs[a] > right && xs[b] > right) ||
+          (ys[a] < top && ys[b] < top) ||
+          (ys[a] > bottom && ys[b] > bottom)
+        )
+          continue;
+        if (hovered >= 0 && (a === hovered || b === hovered)) {
+          litLinks.push(a, b);
+          continue;
+        }
+        ctx.moveTo(xs[a], ys[a]);
+        ctx.lineTo(xs[b], ys[b]);
       }
       ctx.stroke();
-    }
+      if (litLinks.length) {
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = accent;
+        ctx.beginPath();
+        for (let p = 0; p < litLinks.length; p += 2) {
+          ctx.moveTo(xs[litLinks[p]], ys[litLinks[p]]);
+          ctx.lineTo(xs[litLinks[p + 1]], ys[litLinks[p + 1]]);
+        }
+        ctx.stroke();
+      }
 
-    // Nodes, one path per colour. With a note hovered, the rest are dimmed
-    // in a first pass and its neighbourhood drawn at full strength after.
-    const pass = (wantLit: boolean, alpha: number) => {
-      ctx.globalAlpha = alpha;
-      // Tags and the like are rings, so no group colour is mistaken for
-      // them.
-      for (const bucket of buckets) {
-        const { ring } = bucket;
-        const style = bucket.colour === MUTED ? muted : fills[bucket.colour];
-        {
-          ctx.beginPath();
-          let any = false;
-          for (const i of bucket.nodes) {
-            if (i === focus || i === hovered) continue;
-            if (lit && isLit(i) !== wantLit) continue;
-            if (Number.isNaN(xs[i]) || outside(i)) continue;
-            any = true;
-            const r = radius[i];
-            if (!ring && r * 2 * k < DOT_PX) {
-              ctx.rect(xs[i] - r, ys[i] - r, 2 * r, 2 * r);
+      // Nodes, one path per colour. With a note hovered, the rest are dimmed
+      // in a first pass and its neighbourhood drawn at full strength after.
+      const pass = (wantLit: boolean, alpha: number) => {
+        ctx.globalAlpha = alpha;
+        // Tags and the like are rings, so no group colour is mistaken for
+        // them.
+        for (const bucket of buckets) {
+          const { ring } = bucket;
+          const style = bucket.colour === MUTED ? muted : fills[bucket.colour];
+          {
+            ctx.beginPath();
+            let any = false;
+            for (const i of bucket.nodes) {
+              if (i === focus || i === hovered) continue;
+              if (lit && isLit(i) !== wantLit) continue;
+              if (Number.isNaN(xs[i]) || outside(i)) continue;
+              any = true;
+              const r = radius[i];
+              if (!ring && r * 2 * k < DOT_PX) {
+                ctx.rect(xs[i] - r, ys[i] - r, 2 * r, 2 * r);
+              } else {
+                ctx.moveTo(xs[i] + r, ys[i]);
+                ctx.arc(xs[i], ys[i], ring ? r - 1 : r, 0, Math.PI * 2);
+              }
+            }
+            if (!any) continue;
+            if (ring) {
+              ctx.strokeStyle = style;
+              ctx.lineWidth = 2;
+              ctx.stroke();
             } else {
-              ctx.moveTo(xs[i] + r, ys[i]);
-              ctx.arc(xs[i], ys[i], ring ? r - 1 : r, 0, Math.PI * 2);
+              ctx.fillStyle = style;
+              ctx.fill();
             }
           }
-          if (!any) continue;
-          if (ring) {
-            ctx.strokeStyle = style;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-          } else {
-            ctx.fillStyle = style;
-            ctx.fill();
-          }
         }
+      };
+      if (lit) {
+        pass(false, 0.25);
+        pass(true, 1);
+      } else {
+        pass(false, 1);
       }
-    };
-    if (lit) {
-      pass(false, 0.25);
-      pass(true, 1);
-    } else {
-      pass(false, 1);
-    }
-    for (const i of [focus, hovered]) {
-      if (i < 0 || Number.isNaN(xs[i])) continue;
-      ctx.globalAlpha = 1;
-      ctx.beginPath();
-      ctx.arc(xs[i], ys[i], radius[i], 0, Math.PI * 2);
-      ctx.fillStyle = accent;
-      ctx.fill();
+      for (const i of [focus, hovered]) {
+        if (i < 0 || Number.isNaN(xs[i])) continue;
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], radius[i], 0, Math.PI * 2);
+        ctx.fillStyle = accent;
+        ctx.fill();
+      }
     }
 
     // Labels in screen pixels, so they stay readable at any zoom. They fade
@@ -475,6 +575,7 @@
       const next = nodeAt(sx, sy);
       if (next !== hovered) {
         hovered = next;
+        showHover();
         canvas!.style.cursor = next >= 0 ? 'pointer' : 'grab';
         schedule();
       }
@@ -518,6 +619,7 @@
   function onPointerLeave() {
     if (drag || hovered < 0) return;
     hovered = -1;
+    showHover();
     schedule();
   }
 
@@ -548,6 +650,10 @@
   data-graph-nodes={shownNodes}
   data-graph-links={shownLinks}
 >
+  <canvas
+    bind:this={glCanvas}
+    class="pointer-events-none absolute inset-0 size-full"
+  ></canvas>
   <canvas
     bind:this={canvas}
     class="absolute inset-0 size-full cursor-grab touch-none"
