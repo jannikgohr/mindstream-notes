@@ -84,6 +84,7 @@ export type Effect =
   | { effect: 'insertMarkdown'; markdown: string }
   | { effect: 'openMenu'; items: MenuItem[] }
   | { effect: 'openNote'; noteId: string; preview?: boolean }
+  | { effect: 'openTabView'; viewId: string }
   | {
       effect: 'openOrCreateNote';
       title: string;

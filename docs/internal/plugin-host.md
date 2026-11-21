@@ -142,6 +142,11 @@ itself in the app through its manifest's `descriptionKey` and `documentation`.
 - **Typst** (`com.mindstream.typst`) renders and exports through the declared
   native `typst` tool. Its settings, source language, toolbar items and the
   `tinymist` preview service are declarative.
+- **Graph** (`com.mindstream.graph`) is a compiled Rust component with a
+  sidebar view and a tab view. It names the notes and tags to draw, their
+  colour groups and the note-to-tag links; the host adds the links between
+  notes from one read of every body (`list_note_links`), lays the graph out in
+  a worker and draws it.
 - **Journal** (`com.mindstream.journal`) is a compiled Rust component. It
   turns days into daily-note titles and buckets notes by local day; the host
   finds or creates the note (`openOrCreateNote`) and renders its template

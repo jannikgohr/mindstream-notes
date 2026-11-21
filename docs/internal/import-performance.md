@@ -33,14 +33,8 @@ part.
 
 ## The Wikipedia performance vault
 
-[`mediawiki-to-markdown`](https://github.com/philipashlock/mediawiki-to-markdown)
-turns a MediaWiki XML export into a folder of Markdown files with YAML
-frontmatter and relative links between pages. That is the Markdown folder
-format, so no extra tooling is needed:
-
-1. Convert the Top-1M export with `mediawiki-to-markdown`.
-2. Import the output folder, choosing **Markdown folder**. Links to pages that
-   are not in the dump stay as ordinary Markdown links; the unresolved-links
-   option only applies to `[[wikilinks]]`.
-3. Record the time to finish, peak memory, the size of `mindstream.db`
-   afterwards, and the time of the file-tree reload on its own.
+`pnpm bench:vault` (see the [e2e README](../../e2e-tests/README.md)) builds an
+Obsidian vault from Simple English Wikipedia, with `[[links]]`, categories as
+tags and redirects as aliases, imports it into the browser build and times the
+import and the file-tree reload among other steps. Links to articles outside
+the chosen number stay unresolved, which exercises that path too.
