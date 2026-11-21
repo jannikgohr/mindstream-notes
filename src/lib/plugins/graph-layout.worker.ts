@@ -8,76 +8,56 @@
  * tags its positions, since indexes mean nothing once the page has sent the
  * next layout.
  */
-import {
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  forceX,
-  forceY,
-  type SimulationNodeDatum
-} from 'd3-force';
+import { createForceLayout, type ForceLayout } from './graph-force';
 import type { LayoutRequest, LayoutPositions } from './graph-layout';
 
-interface Node extends SimulationNodeDatum {
-  radius: number;
-}
-
 // Past this many nodes collisions cost more than they show, and the layout
-// cools in about 90 ticks rather than d3's 300: each tick is slow there, and
+// cools in about 90 ticks rather than 300: each tick is slow there, and
 // every one redraws the whole graph. Repulsion also reaches the whole graph,
 // or the pull to the centre packs it into a heap of overlapping nodes.
 const LARGE = 5000;
 const LARGE_ALPHA_DECAY = 0.05;
+const ALPHA_DECAY = 1 - 0.001 ** (1 / 300);
+const NEAR = 400;
 // A new layout ticks this long before its first positions, so it opens mostly
 // settled rather than exploding outwards.
 const WARMUP_MS = 300;
 const FRAME_MS = 16;
 
-const NEAR = 400;
-const charge = forceManyBody<Node>().strength(-60);
-// Links name nodes by index, forceLink's default id.
-const links = forceLink<Node, { source: number; target: number }>([]).distance(
-  40
-);
-const collide = forceCollide<Node>((n) => n.radius + 2);
-const simulation = forceSimulation<Node>([])
-  .force('charge', charge)
-  .force('link', links)
-  .force('x', forceX<Node>(0).strength(0.04))
-  .force('y', forceY<Node>(0).strength(0.04))
-  .stop();
-
 let version = 0;
-let nodes: Node[] = [];
+let layout: ForceLayout | undefined;
 let timer: ReturnType<typeof setTimeout> | null = null;
+// Repulsion is spread over up to this many ticks to keep a tick in a frame.
+const MAX_CHARGE_EVERY = 8;
+
+/** One tick, then repulsion spread wider or narrower by how long it took. */
+function tick(layout: ForceLayout) {
+  const start = performance.now();
+  layout.tick();
+  const took = performance.now() - start;
+  if (took > FRAME_MS && layout.chargeEvery < MAX_CHARGE_EVERY)
+    layout.chargeEvery++;
+  else if (took < FRAME_MS / 2 && layout.chargeEvery > 1) layout.chargeEvery--;
+}
 
 function post() {
-  const x = new Float32Array(nodes.length);
-  const y = new Float32Array(nodes.length);
-  nodes.forEach((n, i) => {
-    x[i] = n.x!;
-    y[i] = n.y!;
-  });
+  if (!layout) return;
+  const x = Float32Array.from(layout.x);
+  const y = Float32Array.from(layout.y);
   const message: LayoutPositions = { version, x, y };
   postMessage(message, { transfer: [x.buffer, y.buffer] });
 }
 
-function settled() {
-  return (
-    simulation.alpha() < simulation.alphaMin() && simulation.alphaTarget() === 0
-  );
-}
-
 function run() {
   timer = null;
+  if (!layout) return;
   // One tick a frame. A small graph ticks in microseconds, and ticking it for
   // a whole frame would finish the layout between two messages: the page
   // would see it jump, and a dragged node would snap back on release.
   const start = performance.now();
-  simulation.tick();
+  tick(layout);
   post();
-  if (!settled())
+  if (!layout.settled())
     timer = setTimeout(
       run,
       Math.max(0, FRAME_MS - (performance.now() - start))
@@ -93,49 +73,40 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
   switch (request.type) {
     case 'layout': {
       version = request.version;
-      nodes = Array.from(request.radius, (radius, i) => {
-        const node: Node = { radius, index: i };
-        if (!Number.isNaN(request.x[i])) {
-          node.x = request.x[i];
-          node.y = request.y[i];
-        }
-        return node;
+      const large = request.radius.length > LARGE;
+      // A drag from the layout this one replaces never gets its release:
+      // the new layout starts with nothing held.
+      layout = createForceLayout({
+        radius: request.radius,
+        x: request.x,
+        y: request.y,
+        links: request.links,
+        alpha: request.alpha,
+        alphaDecay: large ? LARGE_ALPHA_DECAY : ALPHA_DECAY,
+        chargeReach: large ? Infinity : NEAR,
+        // Coarser grouping settles a big graph into the same shape, sooner.
+        theta: large ? 1.2 : 0.9,
+        collide: !large
       });
-      simulation.nodes(nodes);
-      const pairs = [];
-      for (let i = 0; i < request.links.length; i += 2)
-        pairs.push({ source: request.links[i], target: request.links[i + 1] });
-      links.links(pairs);
-      const large = nodes.length > LARGE;
-      simulation.force('collide', large ? null : collide);
-      charge.distanceMax(large ? Infinity : NEAR);
-      simulation.alphaDecay(large ? LARGE_ALPHA_DECAY : 1 - 0.001 ** (1 / 300));
-      // A drag from the layout this one replaces never gets its release.
-      simulation.alphaTarget(0);
-      simulation.alpha(request.alpha);
       if (request.warmup) {
         const until = performance.now() + WARMUP_MS;
-        while (performance.now() < until && !settled()) simulation.tick();
+        while (performance.now() < until && !layout.settled()) tick(layout);
       }
       post();
       wake();
       return;
     }
     case 'drag': {
-      const node = nodes[request.index];
-      if (request.version !== version || !node) return;
-      node.fx = request.x;
-      node.fy = request.y;
-      simulation.alphaTarget(0.3);
+      if (request.version !== version || !layout) return;
+      layout.pin(request.index, request);
+      layout.alphaTarget = 0.3;
       wake();
       return;
     }
     case 'release': {
-      const node = nodes[request.index];
-      if (request.version !== version || !node) return;
-      node.fx = null;
-      node.fy = null;
-      simulation.alphaTarget(0);
+      if (request.version !== version || !layout) return;
+      layout.pin(request.index, undefined);
+      layout.alphaTarget = 0;
       wake();
       return;
     }
