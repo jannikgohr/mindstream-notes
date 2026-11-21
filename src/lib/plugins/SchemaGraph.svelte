@@ -117,6 +117,17 @@
   let radius = new Float32Array(0);
   let xs = new Float32Array(0);
   let ys = new Float32Array(0);
+  // The layout sends positions slower than the screen redraws on a big
+  // graph, so what is drawn glides from one batch to the next: from where
+  // the picture was when a batch came, to that batch, over a batch's time.
+  let fromX = new Float32Array(0);
+  let fromY = new Float32Array(0);
+  let toX: Float32Array | undefined;
+  let toY: Float32Array | undefined;
+  let fromActive = 0;
+  let arrived = 0;
+  let batchMs = 16;
+  let glided = true;
   let pairs = new Uint32Array(0);
   // Indexes from the biggest node down, the order labels are drawn in.
   let byRadius = new Uint32Array(0);
@@ -232,20 +243,46 @@
 
   function onPositions(positions: LayoutPositions) {
     if (positions.version !== version) return;
-    active = positions.active;
-    xs = positions.x;
-    ys = positions.y;
-    if (renderer) {
-      if (sceneStale) {
-        showHover();
-        renderer.setScene({ links: pairs, radius, styles: nodeStyles() });
-        sceneStale = false;
-        showHover();
-      }
-      renderer.setPositions(xs, ys);
+    const now = performance.now();
+    if (fromX.length !== xs.length) {
+      fromX = new Float32Array(xs.length);
+      fromY = new Float32Array(xs.length);
     }
-    fit();
+    fromX.set(xs);
+    fromY.set(ys);
+    // The first batch of a layout is drawn as it is, and so is one after a
+    // pause: gliding is for a stream of them. A node that was not in the
+    // layout yet has nowhere to glide from either.
+    const stream = arrived > 0 && now - arrived < 250;
+    fromActive = stream ? active : 0;
+    batchMs = stream ? Math.max(now - arrived, 8) : 0;
+    arrived = now;
+    glided = false;
+    active = positions.active;
+    toX = positions.x;
+    toY = positions.y;
+    if (renderer && sceneStale) {
+      showHover();
+      renderer.setScene({ links: pairs, radius, styles: nodeStyles() });
+      sceneStale = false;
+      showHover();
+    }
     schedule();
+  }
+
+  /** Move what is drawn towards the latest positions; true while under way. */
+  function glide(now: number): boolean {
+    if (!toX || !toY || glided) return false;
+    const t = batchMs ? Math.min((now - arrived) / batchMs, 1) : 1;
+    for (let i = 0; i < xs.length; i++) {
+      const [x, y] = [fromX[i], fromY[i]];
+      const jump = t === 1 || i >= fromActive || Number.isNaN(x);
+      xs[i] = jump ? toX[i] : x + (toX[i] - x) * t;
+      ys[i] = jump ? toY[i] : y + (toY[i] - y) * t;
+    }
+    renderer?.setPositions(xs, ys);
+    glided = t === 1;
+    return !glided;
   }
 
   // Bodies are read and cached by the host; a redraw only reloads the notes
@@ -318,6 +355,8 @@
     );
     xs = new Float32Array(n).fill(NaN);
     ys = new Float32Array(n).fill(NaN);
+    toX = toY = undefined;
+    arrived = 0;
     let kept = 0;
     ids.forEach((id, i) => {
       const old = previous.get(id);
@@ -382,6 +421,8 @@
     const n = ids.length;
     xs = new Float32Array(n).fill(NaN);
     ys = new Float32Array(n).fill(NaN);
+    toX = toY = undefined;
+    arrived = 0;
     active = 0;
     autoFit = true;
     picked = null;
@@ -426,7 +467,6 @@
       x: -((minX + maxX) / 2) * k,
       y: -((minY + maxY) / 2) * k
     };
-    schedule();
   }
 
   $effect(() => {
@@ -505,6 +545,8 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    if (glide(performance.now())) schedule();
+    fit();
     const css = getComputedStyle(canvas);
     const token = (name: string) => css.getPropertyValue(name).trim();
     const fills = GROUP_COLOURS.map((c) => token(`--named-${c}`));

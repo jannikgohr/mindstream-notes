@@ -32,7 +32,11 @@ const distance = (
   layout: ReturnType<typeof createForceLayout>,
   a: number,
   b: number
-) => Math.hypot(layout.x[a] - layout.x[b], layout.y[a] - layout.y[b]);
+) =>
+  Math.hypot(
+    layout.state[4 * a] - layout.state[4 * b],
+    layout.state[4 * a + 1] - layout.state[4 * b + 1]
+  );
 
 describe('createForceLayout', () => {
   it('rests two linked nodes a little past the link length', () => {
@@ -57,7 +61,7 @@ describe('createForceLayout', () => {
     });
     settle(layout);
     for (let a = 0; a < 5; a++) {
-      expect(Number.isFinite(layout.x[a])).toBe(true);
+      expect(Number.isFinite(layout.state[4 * a])).toBe(true);
       for (let b = a + 1; b < 5; b++)
         expect(distance(layout, a, b)).toBeGreaterThan(8);
     }
@@ -81,9 +85,12 @@ describe('createForceLayout', () => {
     // A chain 0-1-2 and a far-off start for the last node.
     const layout = layoutOf(3, [0, 1, 1, 2]);
     layout.active = 2;
-    const [restX, restY] = [layout.x[2], layout.y[2]];
+    const [restX, restY] = [layout.state[4 * 2], layout.state[4 * 2 + 1]];
     for (let i = 0; i < 50; i++) layout.tick();
-    expect([layout.x[2], layout.y[2]]).toEqual([restX, restY]);
+    expect([layout.state[4 * 2], layout.state[4 * 2 + 1]]).toEqual([
+      restX,
+      restY
+    ]);
     // The hidden node's link pulled nothing: the two rest as a lone pair.
     expect(distance(layout, 0, 1)).toBeGreaterThan(40);
 
@@ -117,8 +124,14 @@ describe('createForceLayout', () => {
     let error = 0;
     let moved = 0;
     for (let i = 0; i < n; i++) {
-      error += Math.hypot(exact.x[i] - grouped.x[i], exact.y[i] - grouped.y[i]);
-      moved += Math.hypot(exact.x[i] - from.x[i], exact.y[i] - from.y[i]);
+      error += Math.hypot(
+        exact.state[4 * i] - grouped.state[4 * i],
+        exact.state[4 * i + 1] - grouped.state[4 * i + 1]
+      );
+      moved += Math.hypot(
+        exact.state[4 * i] - from.x[i],
+        exact.state[4 * i + 1] - from.y[i]
+      );
     }
     expect(moved).toBeGreaterThan(0);
     expect(error / moved).toBeLessThan(0.05);
@@ -130,13 +143,15 @@ describe('createForceLayout', () => {
     layout.pin(0, { x: 500, y: 500 });
     layout.alphaTarget = 0.3;
     for (let i = 0; i < 300; i++) layout.tick();
-    expect(layout.x[0]).toBe(500);
-    expect(layout.y[0]).toBe(500);
+    expect(layout.state[4 * 0]).toBe(500);
+    expect(layout.state[4 * 0 + 1]).toBe(500);
     expect(distance(layout, 0, 1)).toBeLessThan(150);
 
     layout.pin(0, undefined);
     layout.alphaTarget = 0;
     settle(layout);
-    expect(Math.hypot(layout.x[0], layout.y[0])).toBeLessThan(400);
+    expect(
+      Math.hypot(layout.state[4 * 0], layout.state[4 * 0 + 1])
+    ).toBeLessThan(400);
   });
 });

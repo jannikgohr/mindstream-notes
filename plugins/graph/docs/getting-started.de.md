@@ -73,9 +73,12 @@ Kräfte, jeweils in Prozent des Üblichen:
 
 **Voreinstellungen** halten einen Satz dieser Einstellungen unter einem Namen
 fest. Gib einen Namen ein und drücke **Speichern**, dann wähle die
-Voreinstellung aus der Liste, um die Einstellungen zurückzuholen. Speichern
-unter einem vorhandenen Namen ersetzt diese Voreinstellung. **Standard** in der
-Liste und **Auf Standard zurücksetzen** setzen jede Einstellung zurück.
+Voreinstellung aus der Liste, um die Einstellungen zurückzuholen. Änderst du
+eine Einstellung, während eine Voreinstellung in Gebrauch ist, markiert die
+Liste sie als geändert: Der Speichern-Knopf daneben schreibt die Änderungen in
+die Voreinstellung, der Stift benennt sie um und der Papierkorb löscht sie.
+**Standard** in der Liste und **Auf Standard zurücksetzen** setzen jede
+Einstellung zurück.
 
 ## Entfernen
 
