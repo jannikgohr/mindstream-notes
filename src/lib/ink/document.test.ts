@@ -747,3 +747,112 @@ function buildLegacyPayload(
   }
   return new Uint8Array(out);
 }
+
+describe('page strokes read by the Rust host', () => {
+  // `ink_pages` in src-tauri/storage-core/src/yrs_doc.rs decodes these notes
+  // and must find the same strokes on the same pages. After a deliberate
+  // change to how ink is stored, regenerate with UPDATE_INK_FIXTURE=1 and
+  // run `pnpm exec prettier --write` on the fixture.
+  const fixturePath =
+    'src-tauri/storage-core/src/yrs_doc/ink_pages_fixture.json';
+
+  const point = (x: number, y: number, pressure = 1) => ({ x, y, pressure });
+
+  function pagedNote(): InkDocument {
+    const doc = new Y.Doc();
+    doc.clientID = 1;
+    const ink = new InkDocument(doc);
+    const a4 = { width: 1190, height: 1684 };
+    ink.restorePages([
+      { id: 'a', ...a4 },
+      { id: 'b', width: 800, height: 600 },
+      { id: 'c', ...a4 }
+    ]);
+    const bTop = 1684 + 72;
+    const cTop = bTop + 600 + 72;
+    ink.addStrokes([
+      {
+        id: 's1',
+        color: 0xff112233,
+        width: 3,
+        points: [point(100, 100, 0.5), point(400, 150, 0.25)]
+      },
+      {
+        id: 's2',
+        color: 0x80ff0000,
+        width: 6,
+        points: [point(300, bTop + 100), point(700, bTop + 300)]
+      },
+      { id: 's3', color: 0xff000000, width: 2, points: [point(50, cTop + 50)] },
+      { id: 's4', color: 0xff000000, width: 2, points: [point(60, 60)] }
+    ]);
+    ink.setStrokeTombstoned('s4', true);
+    ink.deletePage('c');
+    const v1 = new Uint8Array(9 + 12);
+    const view = new DataView(v1.buffer);
+    view.setUint8(0, 1);
+    view.setUint32(1, 0xff00ff00, true);
+    view.setUint32(5, 1, true);
+    view.setFloat32(9, 20, true);
+    view.setFloat32(13, 30, true);
+    view.setFloat32(17, 0.75, true);
+    ink.transactLocalUpdate(() => {
+      const legacy = new Y.Map<unknown>();
+      legacy.set('id', 's5');
+      legacy.set('tombstoned', false);
+      legacy.set('pageId', 'a');
+      legacy.set('payload', v1);
+      ink.doc.getArray('strokes').push([legacy]);
+    });
+    return ink;
+  }
+
+  function legacyNote(): InkDocument {
+    const doc = new Y.Doc();
+    doc.clientID = 2;
+    const ink = new InkDocument(doc);
+    ink.addStrokes([
+      {
+        id: 'l1',
+        color: 0xff000000,
+        width: 4,
+        points: [point(50, 50), point(300, 80)]
+      },
+      {
+        id: 'l2',
+        color: 0xff000000,
+        width: 4,
+        points: [point(100, 1600), point(120, 1800)]
+      },
+      { id: 'l3', color: 0xff000000, width: 4, points: [point(200, 4000)] }
+    ]);
+    return ink;
+  }
+
+  function described(written: InkDocument) {
+    const state = written.encode();
+    const ink = InkDocument.fromBytes(state);
+    return {
+      state: Buffer.from(state).toString('base64'),
+      pages: ink.pages().map((page) => ({
+        id: page.id,
+        strokes: ink.pageStrokes(page.id).map((stroke) => ({
+          color: stroke.color,
+          width: stroke.width,
+          points: stroke.points.map((p) => [p.x, p.y, p.pressure])
+        }))
+      }))
+    };
+  }
+
+  it('matches the fixture the Rust reader is tested against', async () => {
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    const actual = {
+      paged: described(pagedNote()),
+      legacy: described(legacyNote())
+    };
+    if (process.env.UPDATE_INK_FIXTURE)
+      writeFileSync(fixturePath, `${JSON.stringify(actual, null, 2)}\n`);
+    expect(actual).toEqual(JSON.parse(readFileSync(fixturePath, 'utf8')));
+  });
+});
