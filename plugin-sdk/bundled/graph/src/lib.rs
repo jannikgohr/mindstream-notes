@@ -3,8 +3,8 @@
 //!
 //! The plugin picks the notes, tags and colour groups from metadata; the host
 //! adds the links between notes from bodies the plugin never sees, and draws
-//! the graph. The host keeps `state` (`{ local, focus? }`) between calls; this
-//! plugin holds nothing.
+//! the graph. The host keeps `state` (`{ focus? }`) between calls; this plugin
+//! holds nothing.
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -21,8 +21,8 @@ fn host<T>(result: Result<T, mindstream::plugin::types::Error>) -> Result<T, Str
     result.map_err(|e| format!("{e:?}"))
 }
 
-/// Where a view is drawn: the sidebar follows the open note, the tab shows
-/// the whole vault. Both can be narrowed to a clicked tag.
+/// Where a view is drawn: the sidebar shows what is near the open note, the
+/// tab the whole vault. Both can be narrowed to a clicked tag.
 #[derive(Clone, Copy, PartialEq)]
 enum Place {
     Sidebar,
@@ -45,13 +45,6 @@ impl Graph<'_> {
     /// A node the view is narrowed to: a clicked tag.
     fn focus(&self) -> Option<&str> {
         self.state()["focus"].as_str()
-    }
-
-    /// Following the open note. The sidebar starts out doing so.
-    fn local(&self, place: Place) -> bool {
-        self.state()["local"]
-            .as_bool()
-            .unwrap_or(place == Place::Sidebar)
     }
 
     fn depth(&self) -> u64 {
@@ -77,7 +70,7 @@ impl Graph<'_> {
     }
 
     fn render(&self, place: Place) -> Result<Value, String> {
-        let local = self.local(place);
+        let local = place == Place::Sidebar;
         let focus = self.focus();
         let active = self.input["activeNoteId"].as_str();
         let all = host(notes::all())?;
@@ -103,12 +96,11 @@ impl Graph<'_> {
         }
 
         let mut children = Vec::new();
-        if focus.is_some() || place == Place::Sidebar {
-            let narrowed = focus.is_some() || local;
+        if focus.is_some() {
             children.push(json!({
                 "type": "button",
-                "label": { "key": if narrowed { "view.showVault" } else { "view.showLocal" } },
-                "on": { "event": "toggle" },
+                "label": { "key": if local { "view.showLocal" } else { "view.showVault" } },
+                "on": { "event": "unfocus" },
             }));
         }
         if focus.is_none() && local && active.is_none() {
@@ -134,32 +126,15 @@ impl Graph<'_> {
         children.push(graph);
 
         Ok(json!({
-            "state": self.next_state(local, focus),
+            "state": state(focus),
             "view": { "type": "stack", "children": children },
         }))
     }
 
-    fn next_state(&self, local: bool, focus: Option<&str>) -> Value {
-        match focus {
-            Some(focus) => json!({ "local": local, "focus": focus }),
-            None => json!({ "local": local }),
-        }
-    }
-
     fn on_event(&self) -> Result<Value, String> {
         let value = self.input["value"].as_str().unwrap_or_default();
-        // `render` runs before any event, and always stores `local`.
-        let local = self.state()["local"].as_bool().unwrap_or(false);
-        let state = |focus| self.next_state(local, focus);
         match self.input["event"].as_str().unwrap_or_default() {
-            // Leaving a tag goes back to where the view was; otherwise the
-            // view switches between the open note and the whole vault.
-            "toggle" => Ok(json!({
-                "state": match self.focus() {
-                    Some(_) => state(None),
-                    None => self.next_state(!local, None),
-                },
-            })),
+            "unfocus" => Ok(json!({ "state": state(None) })),
             "open" if value.starts_with(TAG_PREFIX) => Ok(json!({ "state": state(Some(value)) })),
             "open" => {
                 let note = host(notes::get(value))?.ok_or("no such note")?;
@@ -171,6 +146,13 @@ impl Graph<'_> {
             "open-graph" => Ok(json!({ "state": state(self.focus()), "effect": open_tab() })),
             other => Err(format!("unknown event {other}")),
         }
+    }
+}
+
+fn state(focus: Option<&str>) -> Value {
+    match focus {
+        Some(focus) => json!({ "focus": focus }),
+        None => json!({}),
     }
 }
 

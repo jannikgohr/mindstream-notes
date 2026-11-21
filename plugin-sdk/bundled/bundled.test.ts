@@ -319,14 +319,14 @@ describe('Graph component', { timeout: 60_000 }, () => {
       ...options
     });
   type Rendered = {
-    state: { local: boolean; focus?: string };
+    state: { focus?: string };
     view: { children: Record<string, unknown>[] };
   };
 
   it('draws the whole vault in its tab: notes by top-level folder, and tags linked to their notes', async () => {
     const plugin = await graph();
     const tab = await plugin.call<Rendered>('renderTab', { state: null });
-    expect(tab.state).toEqual({ local: false });
+    expect(tab.state).toEqual({});
     expect(tab.view.children).toEqual([
       {
         type: 'graph',
@@ -363,59 +363,49 @@ describe('Graph component', { timeout: 60_000 }, () => {
     });
   });
 
-  it('follows the open note in the sidebar, and can show the whole vault there', async () => {
+  it('follows the open note in the sidebar, and never shows the whole vault there', async () => {
     const plugin = await graph();
+    // A state from when the sidebar could show the vault changes nothing.
     const local = await plugin.call<Rendered>('render', {
-      state: null,
+      state: { local: false },
       activeNoteId: 'b'
     });
-    expect(local.state).toEqual({ local: true });
-    expect(local.view.children[0]).toEqual({
-      type: 'button',
-      label: { key: 'view.showVault' },
-      on: { event: 'toggle' }
-    });
-    expect(local.view.children[1]).toMatchObject({ focus: 'b' });
+    expect(local.state).toEqual({});
+    expect(local.view.children).toMatchObject([{ type: 'graph', focus: 'b' }]);
     const none = await plugin.call<Rendered>('render', { state: local.state });
-    expect(none.view.children.slice(1)).toMatchObject([
+    expect(none.view.children).toMatchObject([
       { type: 'text', text: { key: 'view.noActiveNote' } },
       { type: 'graph', focus: '' }
     ]);
-
-    const toggled = await plugin.call<Rendered>('onEvent', {
-      state: local.state,
-      event: 'toggle'
-    });
-    expect(toggled).toEqual({ state: { local: false } });
-    const vault = await plugin.call<Rendered>('render', {
-      state: toggled.state,
-      activeNoteId: 'b'
-    });
-    expect(vault.view.children[0]).toMatchObject({
-      label: { key: 'view.showLocal' }
-    });
-    expect(vault.view.children[1]).not.toHaveProperty('focus');
   });
 
   it('narrows to a clicked tag, opens a clicked note and opens its tab', async () => {
     const plugin = await graph();
-    const state = { local: false };
+    const state = {};
     const tagged = await plugin.call<Rendered>('onEvent', {
       state,
       event: 'open',
       value: 'tag:b'
     });
-    expect(tagged).toEqual({ state: { local: false, focus: 'tag:b' } });
+    expect(tagged).toEqual({ state: { focus: 'tag:b' } });
     const tab = await plugin.call<Rendered>('renderTab', {
       state: tagged.state
     });
-    expect(tab.view.children[0]).toMatchObject({
-      label: { key: 'view.showVault' }
+    expect(tab.view.children).toMatchObject([
+      { label: { key: 'view.showVault' }, on: { event: 'unfocus' } },
+      { focus: 'tag:b' }
+    ]);
+    const side = await plugin.call<Rendered>('render', {
+      state: tagged.state,
+      activeNoteId: 'b'
     });
-    expect(tab.view.children[1]).toMatchObject({ focus: 'tag:b' });
+    expect(side.view.children).toMatchObject([
+      { label: { key: 'view.showLocal' } },
+      { focus: 'tag:b' }
+    ]);
     expect(
-      await plugin.call('onEvent', { state: tagged.state, event: 'toggle' })
-    ).toEqual({ state: { local: false } });
+      await plugin.call('onEvent', { state: tagged.state, event: 'unfocus' })
+    ).toEqual({ state: {} });
 
     expect(
       await plugin.call('onEvent', { state, event: 'open', value: 'a' })
