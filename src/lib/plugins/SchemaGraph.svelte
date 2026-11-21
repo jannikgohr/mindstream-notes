@@ -14,11 +14,16 @@
    * Without WebGL the 2D canvas draws everything.
    */
   import { untrack } from 'svelte';
+  import { Settings2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { loadNoteLinks } from '$lib/notes/note-relations';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
-  import { startLayoutWorker, type LayoutPositions } from './graph-layout';
+  import {
+    DEFAULT_FORCES,
+    startLayoutWorker,
+    type LayoutPositions
+  } from './graph-layout';
   import {
     createGraphRenderer,
     NODE_ACCENT,
@@ -28,17 +33,25 @@
     rgba,
     type GraphRenderer
   } from './graph-renderer';
+  import PluginSettingsPanel from './PluginSettingsPanel.svelte';
   import { adjacency, visibleGraph } from './schema-graph';
+  import { pluginSettingsSectionsFor } from './settings-bridge';
   import type { ViewNode } from './view-schema';
 
   type GraphNode = Extract<ViewNode, { type: 'graph' }>;
   let {
+    pluginId,
     node,
     onEvent
   }: {
+    /** The plugin whose settings the gear opens. */
+    pluginId: string;
     node: GraphNode;
     onEvent: (event: string, value: string) => void;
   } = $props();
+
+  const hasSettings = $derived(pluginSettingsSectionsFor(pluginId).length > 0);
+  let settingsOpen = $state(false);
 
   // Code stores a colour's name; the theme decides its value (see app.css).
   const GROUP_COLOURS = [
@@ -52,6 +65,16 @@
     'red'
   ];
   const MUTED = -1;
+  // How a note stands to the hovered or focused one: 1 that one links to it,
+  // 2 it links to that one, 3 both. Each has a colour of GROUP_COLOURS, and
+  // 0 is everything else linked, a tag for one.
+  const RELATION_COLOURS = [-1, 4, 2, 3];
+  const RELATION_LABELS = [
+    '',
+    'graph.linksTo',
+    'graph.linkedFrom',
+    'graph.linkedBoth'
+  ] as const;
   const DRAG_THRESHOLD = 4;
   // How far around a note a finger still hits it, and how long it must rest
   // on the note before a drag moves the note rather than the view.
@@ -98,6 +121,11 @@
   let neighbours = adjacency([]);
   let version = 0;
   let hovered = -1;
+  let related = new Uint8Array(0);
+  // The hovered note's links as index pairs, by the relation of the other end.
+  let litLinks: number[][] = [[], [], [], []];
+  let legend = $state(false);
+  let sentForces = '';
   let camera = { x: 0, y: 0, k: 1 };
   let fittedFocus: string | undefined;
   // The camera follows the layout until the user moves it: positions keep
@@ -133,7 +161,11 @@
     const lit = hovered >= 0 ? neighbours.get(ids[hovered]) : undefined;
     const styles = new Uint8Array(ids.length * 2);
     for (let i = 0; i < ids.length; i++) {
-      styles[2 * i] = colour[i] === MUTED ? PALETTE_SIZE - 2 : colour[i];
+      styles[2 * i] = related[i]
+        ? RELATION_COLOURS[related[i]]
+        : colour[i] === MUTED
+          ? PALETTE_SIZE - 2
+          : colour[i];
       styles[2 * i + 1] =
         (other[i] ? NODE_RING : 0) |
         (lit?.has(ids[i]) ? NODE_LIT : 0) |
@@ -142,18 +174,38 @@
     return styles;
   }
 
-  /** Tell the renderer which node is hovered. */
+  /** How every note stands to the one at `centre`: see RELATION_COLOURS. */
+  function relationsTo(centre: number) {
+    const relation = new Uint8Array(ids.length);
+    if (!node.directions || centre < 0) return relation;
+    const id = ids[centre];
+    for (const target of outgoing.get(id) ?? []) {
+      const i = indexOf.get(target);
+      if (i !== undefined && i !== centre) relation[i] |= 1;
+    }
+    for (const near of neighbours.get(id) ?? []) {
+      if (outgoing.get(near)?.includes(id)) relation[indexOf.get(near)!] |= 2;
+    }
+    return relation;
+  }
+
+  /** Work out what the hovered note lights up, and tell the renderer. */
   function showHover() {
-    if (!renderer || sceneStale) return;
-    renderer.setStyles(nodeStyles());
-    const lit: number[] = [];
+    const focus =
+      node.focus === undefined ? -1 : (indexOf.get(node.focus) ?? -1);
+    related = relationsTo(hovered >= 0 ? hovered : focus);
+    legend = related.some((relation) => relation > 0);
+    litLinks = [[], [], [], []];
     if (hovered >= 0) {
       for (let p = 0; p < pairs.length; p += 2) {
-        if (pairs[p] === hovered || pairs[p + 1] === hovered)
-          lit.push(pairs[p], pairs[p + 1]);
+        const [a, b] = [pairs[p], pairs[p + 1]];
+        if (a === hovered || b === hovered)
+          litLinks[related[a === hovered ? b : a]].push(a, b);
       }
     }
-    renderer.setLitLinks(Uint32Array.from(lit));
+    if (!renderer || sceneStale) return;
+    renderer.setStyles(nodeStyles());
+    renderer.setLitLinks(Uint32Array.from(litLinks.flat()));
   }
 
   /** A group's colour from its name, so it is the same in every view. */
@@ -170,6 +222,7 @@
     ys = positions.y;
     if (renderer) {
       if (sceneStale) {
+        showHover();
         renderer.setScene({ links: pairs, radius, styles: nodeStyles() });
         sceneStale = false;
         showHover();
@@ -222,7 +275,16 @@
       nextIds.every((id, i) => id === ids[i]) &&
       nextPairs.length === pairs.length &&
       nextPairs.every((v, i) => v === pairs[i]);
-    if (same && node.focus === fittedFocus) {
+    const forces = {
+      centre: node.forces?.centre ?? DEFAULT_FORCES.centre,
+      repel: node.forces?.repel ?? DEFAULT_FORCES.repel,
+      link: node.forces?.link ?? DEFAULT_FORCES.link,
+      linkDistance: node.forces?.linkDistance ?? DEFAULT_FORCES.linkDistance
+    };
+    const sameForces = JSON.stringify(forces) === sentForces;
+    sentForces = JSON.stringify(forces);
+    if (same && sameForces && node.focus === fittedFocus) {
+      showHover();
       schedule();
       return;
     }
@@ -274,6 +336,7 @@
       (a, b) => radius[b] - radius[a]
     );
     hovered = -1;
+    related = new Uint8Array(n);
     picked = null;
     sceneStale = true;
     empty = n === 0;
@@ -289,8 +352,9 @@
       x: xs.slice(),
       y: ys.slice(),
       links: pairs.slice(),
-      alpha: kept === 0 ? 1 : kept < n ? 0.5 : 0.1,
-      warmup: kept === 0
+      alpha: kept === 0 ? 1 : kept < n || !sameForces ? 0.5 : 0.1,
+      warmup: kept === 0,
+      forces
     });
     schedule();
   }
@@ -423,7 +487,13 @@
         k,
         palette,
         link: rgba(token('--border-strong'), linkAlpha),
-        litLink: rgba(accent, 0.9),
+        litLinks: litLinks.map((run, relation) => ({
+          ends: run.length,
+          colour: rgba(
+            relation ? fills[RELATION_COLOURS[relation]] : accent,
+            0.9
+          )
+        })),
         dimOthers: hovered >= 0
       });
     }
@@ -458,7 +528,6 @@
       ctx.strokeStyle = token('--border-strong');
       ctx.globalAlpha = linkAlpha;
       ctx.beginPath();
-      const litLinks: number[] = [];
       for (let p = 0; p < pairs.length; p += 2) {
         const a = pairs[p];
         const b = pairs[p + 1];
@@ -470,24 +539,22 @@
           (ys[a] > bottom && ys[b] > bottom)
         )
           continue;
-        if (hovered >= 0 && (a === hovered || b === hovered)) {
-          litLinks.push(a, b);
-          continue;
-        }
+        if (hovered >= 0 && (a === hovered || b === hovered)) continue;
         ctx.moveTo(xs[a], ys[a]);
         ctx.lineTo(xs[b], ys[b]);
       }
       ctx.stroke();
-      if (litLinks.length) {
+      litLinks.forEach((run, relation) => {
+        if (!run.length) return;
         ctx.globalAlpha = 0.9;
-        ctx.strokeStyle = accent;
+        ctx.strokeStyle = relation ? fills[RELATION_COLOURS[relation]] : accent;
         ctx.beginPath();
-        for (let p = 0; p < litLinks.length; p += 2) {
-          ctx.moveTo(xs[litLinks[p]], ys[litLinks[p]]);
-          ctx.lineTo(xs[litLinks[p + 1]], ys[litLinks[p + 1]]);
+        for (let p = 0; p < run.length; p += 2) {
+          ctx.moveTo(xs[run[p]], ys[run[p]]);
+          ctx.lineTo(xs[run[p + 1]], ys[run[p + 1]]);
         }
         ctx.stroke();
-      }
+      });
 
       // Nodes, one path per colour. With a note hovered, the rest are dimmed
       // in a first pass and its neighbourhood drawn at full strength after.
@@ -532,6 +599,14 @@
       } else {
         pass(false, 1);
       }
+      related.forEach((relation, i) => {
+        if (!relation || Number.isNaN(xs[i])) return;
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(xs[i], ys[i], radius[i], 0, Math.PI * 2);
+        ctx.fillStyle = fills[RELATION_COLOURS[relation]];
+        ctx.fill();
+      });
       for (const i of [focus, hovered]) {
         if (i < 0 || Number.isNaN(xs[i])) continue;
         ctx.globalAlpha = 1;
@@ -775,6 +850,43 @@
     }}
     oncontextmenu={(event) => event.preventDefault()}
   ></canvas>
+  {#if legend}
+    <ul
+      class="pointer-events-none absolute left-2 top-2 flex flex-col gap-0.5 text-[11px] text-muted-foreground"
+    >
+      {#each [1, 2, 3] as relation (relation)}
+        <li class="flex items-center gap-1.5">
+          <span
+            class="size-2 rounded-full"
+            style="background: var(--named-{GROUP_COLOURS[
+              RELATION_COLOURS[relation]
+            ]})"
+          ></span>
+          {tUi(RELATION_LABELS[relation])}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+  {#if hasSettings}
+    <Button
+      variant="ghost"
+      size="icon"
+      class="absolute right-1 top-1 size-8 text-muted-foreground"
+      title={tUi('graph.settings')}
+      aria-label={tUi('graph.settings')}
+      aria-expanded={settingsOpen}
+      onclick={() => (settingsOpen = !settingsOpen)}
+    >
+      <Settings2 class="size-4" />
+    </Button>
+    {#if settingsOpen}
+      <div
+        class="themed-scrollbar absolute right-1 top-10 max-h-[calc(100%-2.75rem)] w-72 max-w-[calc(100%-0.5rem)] overflow-y-auto rounded-lg border border-border bg-surface-1 p-3 shadow-overlay"
+      >
+        <PluginSettingsPanel {pluginId} />
+      </div>
+    {/if}
+  {/if}
   {#if picked}
     <div
       class="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-lg border border-border bg-surface-1 py-1.5 pl-3 pr-1.5 shadow-overlay"

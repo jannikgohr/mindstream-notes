@@ -1029,6 +1029,14 @@ function validateSetting(
       );
     }
   }
+  for (const bound of ['min', 'max', 'step'] as const) {
+    if (s[bound] !== undefined && !Number.isFinite(s[bound])) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.${bound} must be a number`
+      );
+    }
+  }
   if (s.optionLabelKeys !== undefined) {
     if (!s.optionLabelKeys || typeof s.optionLabelKeys !== 'object') {
       throw new PluginValidationError(

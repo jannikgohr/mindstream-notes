@@ -388,6 +388,10 @@ export interface PluginSetting {
   options?: string[];
   /** Optional plugin-local i18n keys for individual option values. */
   optionLabelKeys?: Record<string, string>;
+  /** The range and step of a `number` or `slider`. */
+  min?: number;
+  max?: number;
+  step?: number;
 }
 
 /** A subsection of settings a plugin adds under the "Plugins" category. */

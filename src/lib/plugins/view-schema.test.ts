@@ -133,6 +133,8 @@ describe('parseViewNode', () => {
         focus: 'a',
         depth: 99,
         orphans: false,
+        forces: { centre: 0.5, repel: 9, link: 'x', linkDistance: 1 },
+        directions: true,
         onSelect: 'open'
       })
     ).toEqual({
@@ -146,6 +148,8 @@ describe('parseViewNode', () => {
       focus: 'a',
       depth: 5,
       orphans: false,
+      forces: { centre: 0.5, repel: 2, link: undefined, linkDistance: 10 },
+      directions: true,
       onSelect: 'open'
     });
     expect(
@@ -157,6 +161,8 @@ describe('parseViewNode', () => {
       focus: undefined,
       depth: 1,
       orphans: true,
+      forces: {},
+      directions: false,
       onSelect: 'open'
     });
     expect(parseViewNode({ type: 'graph', nodes: [] })).toBeNull();

@@ -5,8 +5,6 @@
  * per link costs several times as much on a graph of tens of thousands.
  */
 
-const LINK_DISTANCE = 40;
-const CHARGE = -60;
 const VELOCITY_KEEP = 0.6;
 const ALPHA_MIN = 0.001;
 const COLLIDE_PAD = 2;
@@ -34,6 +32,10 @@ export interface ForceOptions {
   collide: boolean;
   /** How hard nodes are drawn to the origin: 0.04 is the usual. */
   centre: number;
+  /** How hard nodes push each other apart: 60 is the usual. */
+  repel: number;
+  /** The length a link rests at: 40 is the usual. */
+  linkDistance: number;
   /**
    * Scales every link's pull. Below 1 suits a graph with so many links that
    * they would otherwise crush it into a lopsided clump.
@@ -218,7 +220,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
 
     const theta2 = options.theta * options.theta;
     const reach2 = options.chargeReach * options.chargeReach;
-    const push = CHARGE;
+    const push = -options.repel;
     // The first tick has no earlier push to keep.
     const every = ticks === 0 ? 1 : Math.max(1, Math.floor(layout.chargeEvery));
     for (let i = ticks % every; i < n; i += every) {
@@ -295,7 +297,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       if (dx === 0) dx = jiggle();
       if (dy === 0) dy = jiggle();
       const length = Math.sqrt(dx * dx + dy * dy);
-      const k = ((length - LINK_DISTANCE) / length) * alpha * linkStrength[l];
+      const k =
+        ((length - options.linkDistance) / length) * alpha * linkStrength[l];
       dx *= k;
       dy *= k;
       const bias = linkBias[l];

@@ -56,6 +56,26 @@ impl Graph<'_> {
             .clamp(1, MAX_DEPTH)
     }
 
+    /// A slider's value as a share of its usual 100.
+    fn share(&self, id: &str) -> f64 {
+        let value = self.setting(id);
+        value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or(100.0)
+            / 100.0
+    }
+
+    /// Whether the search setting, if any, finds the note: in its title, its
+    /// folders or a tag.
+    fn found(&self, note: &NoteMeta, search: &str) -> bool {
+        search.is_empty()
+            || [&note.title, &note.folder_path]
+                .into_iter()
+                .chain(&note.tags)
+                .any(|text| text.to_lowercase().contains(search))
+    }
+
     fn group(&self, note: &NoteMeta) -> Option<String> {
         match self.setting("color-by").as_str().unwrap_or("folder") {
             "folder" => note
@@ -93,11 +113,21 @@ impl Graph<'_> {
         };
         let all = host(notes::all())?;
         let tags = self.setting("tags").as_bool() != Some(false);
+        let search = self
+            .setting("search")
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
 
         let mut nodes = Vec::with_capacity(all.len());
         let mut links = Vec::new();
         let mut tag_names = BTreeSet::new();
         for note in &all {
+            // The note a local graph is drawn around always shows.
+            if !self.found(note, &search) && centre != Some(note.id.as_str()) {
+                continue;
+            }
             nodes.push(match self.group(note) {
                 Some(group) => json!({ "id": note.id, "group": group }),
                 None => json!({ "id": note.id }),
@@ -127,6 +157,13 @@ impl Graph<'_> {
             "links": links,
             "depth": self.depth(),
             "orphans": self.setting("orphans").as_bool() != Some(false),
+            "directions": self.setting("directions").as_bool() != Some(false),
+            "forces": {
+                "centre": self.share("center-force"),
+                "repel": self.share("repel-force"),
+                "link": self.share("link-force"),
+                "linkDistance": self.share("link-distance") * 40.0,
+            },
             "onSelect": "open",
         });
         if let Some(centre) = centre {

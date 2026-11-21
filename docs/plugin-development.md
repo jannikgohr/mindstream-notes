@@ -82,7 +82,8 @@ asymmetric:
   device. Control `type`s: `toggle`, `text`, `number`, `slider`, `select`,
   `radio`, `color`, and the vault pickers **`folder`**, **`tag`** and
   **`note`** (their value is a folder id, tag string or note id, and clears
-  itself when the target is deleted).
+  itself when the target is deleted). A `number` or `slider` takes `min`,
+  `max` and `step`.
   `select` and `radio` settings can add `optionLabelKeys`
   (`{ "<option>": "<i18nKey>" }`) so plugin-owned values like `wysiwyg` can
   display domain language such as "Live Preview".
@@ -667,6 +668,17 @@ only nodes within `depth` links of that one are drawn, and an empty `focus`
 draws nothing; `orphans: false` leaves out nodes without links. Clicking a node
 sends `onSelect` with its ID. The layout runs off the page, so a graph of tens
 of thousands of nodes stays responsive. The Graph plugin is the example.
+
+`forces` (`{ centre?, repel?, link?, linkDistance? }`) tunes the layout: the
+first three are shares of the usual strength, from 0 to 2, and `linkDistance`
+is the length a link rests at, from 10 to 200 with 40 the usual.
+`directions: true` colours the notes around the hovered or focused one by
+whether it links to them, they link to it, or both.
+
+A graph of a plugin with settings has a button that opens those settings
+beside it, with presets: named sets of the plugin's setting values that the
+user saves and switches between. Presets are kept with the vault, and a
+plugin does nothing to get them.
 
 An `on` is either an effect, performed directly, or `{ event, value? }`, which
 calls `onEvent({ ...ctx, state, event, value })`. That returns

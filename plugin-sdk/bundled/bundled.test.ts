@@ -343,12 +343,24 @@ describe('Graph component', { timeout: 60_000 }, () => {
         ],
         depth: 1,
         orphans: true,
+        directions: true,
+        forces: { centre: 1, repel: 1, link: 1, linkDistance: 40 },
         onSelect: 'open'
       }
     ]);
 
     const plain = await graph({
-      settings: { 'color-by': 'tag', tags: false, orphans: false, depth: 3 }
+      settings: {
+        'color-by': 'tag',
+        tags: false,
+        orphans: false,
+        depth: 3,
+        directions: false,
+        'center-force': 50,
+        'repel-force': 200,
+        'link-force': 0,
+        'link-distance': 150
+      }
     });
     const [node] = (await plain.call<Rendered>('renderTab', { state: null }))
       .view.children;
@@ -359,8 +371,27 @@ describe('Graph component', { timeout: 60_000 }, () => {
       ],
       links: [],
       depth: 3,
-      orphans: false
+      orphans: false,
+      directions: false,
+      forces: { centre: 0.5, repel: 2, link: 0, linkDistance: 60 }
     });
+  });
+
+  it('shows only the notes the search finds, by title, folder or tag', async () => {
+    const shown = async (search: string, activeNoteId?: string) => {
+      const plugin = await graph({ settings: { search, tags: false } });
+      const view = activeNoteId
+        ? await plugin.call<Rendered>('render', { state: null, activeNoteId })
+        : await plugin.call<Rendered>('renderTab', { state: null });
+      const nodes = view.view.children[0].nodes as { id: string }[];
+      return nodes.map((node) => node.id);
+    };
+    expect(await shown(' ALPH ')).toEqual(['a']);
+    expect(await shown('projects')).toEqual(['a']);
+    expect(await shown('z')).toEqual(['a']);
+    expect(await shown('nothing')).toEqual([]);
+    // The note a local graph is drawn around shows whatever the search says.
+    expect(await shown('alpha', 'b')).toEqual(['a', 'b']);
   });
 
   it('follows the open note in the sidebar, and never shows the whole vault there', async () => {
