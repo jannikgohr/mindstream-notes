@@ -37,7 +37,7 @@ import {
   resolvePluginString,
   resolvePluginStringOptional
 } from './plugin-i18n';
-import { PRESETS_SETTING } from './setting-presets';
+import { isPresetSetting } from './setting-presets';
 import type { PluginSetting, PluginSettingsContribution } from './types';
 
 /** The synthetic category id under which all plugin settings are grouped. */
@@ -136,7 +136,7 @@ export function pluginSettingDef(id: string): Setting | undefined {
   const entry = settingIndex().get(id);
   if (entry) return toCoreSetting(entry.pluginId, entry.setting);
   // Every plugin's presets are kept with its vault settings.
-  if (parsePluginSettingId(id)?.settingId === PRESETS_SETTING)
+  if (isPresetSetting(parsePluginSettingId(id)?.settingId))
     return { id, scope: 'V', type: 'text' } as Setting;
   return undefined;
 }

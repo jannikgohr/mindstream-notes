@@ -65,8 +65,13 @@ function tick(layout: ForceLayout) {
 
 function post() {
   if (!layout) return;
-  const x = Float32Array.from(layout.x);
-  const y = Float32Array.from(layout.y);
+  const nodes = layout.state.length / 4;
+  const x = new Float32Array(nodes);
+  const y = new Float32Array(nodes);
+  for (let i = 0; i < nodes; i++) {
+    x[i] = layout.state[4 * i];
+    y[i] = layout.state[4 * i + 1];
+  }
   const message: LayoutPositions = { version, active: layout.active, x, y };
   postMessage(message, { transfer: [x.buffer, y.buffer] });
 }

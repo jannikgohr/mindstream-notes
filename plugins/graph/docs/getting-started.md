@@ -57,9 +57,11 @@ Forces, each in percent of the usual:
 - **Link length**: how long a link wants to be.
 
 **Presets** keep a set of these settings under a name. Type a name and press
-**Save**, then pick the preset from the list to bring the settings back.
-Saving under a name that exists replaces that preset. **Defaults** in the list
-and **Reset to defaults** put every setting back.
+**Save**, then pick the preset from the list to bring the settings back. Change
+a setting while a preset is in use and the list marks it as changed: the save
+button beside it writes the changes into the preset, the pencil renames it and
+the bin deletes it. **Defaults** in the list and **Reset to defaults** put
+every setting back.
 
 ## Removing it
 

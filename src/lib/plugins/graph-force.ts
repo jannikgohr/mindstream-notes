@@ -47,8 +47,8 @@ export interface ForceOptions {
 }
 
 export interface ForceLayout {
-  readonly x: Float64Array;
-  readonly y: Float64Array;
+  /** Four numbers per node: where it is, x then y, and how fast it moves. */
+  readonly state: Float64Array;
   alpha: number;
   /** What `alpha` cools to: above 0 keeps the layout moving, as in a drag. */
   alphaTarget: number;
@@ -73,10 +73,9 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   const { radius, links } = options;
   const n = radius.length;
   const m = links.length / 2;
-  const x = new Float64Array(n);
-  const y = new Float64Array(n);
-  const vx = new Float64Array(n);
-  const vy = new Float64Array(n);
+  // Position and velocity side by side, x, y, vx, vy per node: a link or a
+  // collision reads all four of a node, and apart they are four cache misses.
+  const s = new Float64Array(4 * n);
   const pinX = new Float64Array(n).fill(NaN);
   const pinY = new Float64Array(n).fill(NaN);
   for (let i = 0; i < n; i++) {
@@ -84,11 +83,11 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       // d3's sunflower, so a new layout starts spread out and the same.
       const r = 10 * Math.sqrt(0.5 + i);
       const angle = i * Math.PI * (3 - Math.sqrt(5));
-      x[i] = r * Math.cos(angle);
-      y[i] = r * Math.sin(angle);
+      s[4 * i] = r * Math.cos(angle);
+      s[4 * i + 1] = r * Math.sin(angle);
     } else {
-      x[i] = options.x[i];
-      y[i] = options.y[i];
+      s[4 * i] = options.x[i];
+      s[4 * i + 1] = options.y[i];
     }
   }
 
@@ -171,10 +170,10 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   function charge(alpha: number, n: number) {
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
     for (let i = 0; i < n; i++) {
-      if (x[i] < minX) minX = x[i];
-      if (x[i] > maxX) maxX = x[i];
-      if (y[i] < minY) minY = y[i];
-      if (y[i] > maxY) maxY = y[i];
+      if (s[4 * i] < minX) minX = s[4 * i];
+      if (s[4 * i] > maxX) maxX = s[4 * i];
+      if (s[4 * i + 1] < minY) minY = s[4 * i + 1];
+      if (s[4 * i + 1] > maxY) maxY = s[4 * i + 1];
     }
     const size = Math.max(maxX - minX, maxY - minY, 1e-9) * 1.0001;
 
@@ -186,8 +185,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       let y0 = minY;
       let half = size / 2;
       for (let depth = 0; ; depth++) {
-        const right = x[i] >= x0 + half ? 1 : 0;
-        const down = y[i] >= y0 + half ? 1 : 0;
+        const right = s[4 * i] >= x0 + half ? 1 : 0;
+        const down = s[4 * i + 1] >= y0 + half ? 1 : 0;
         const slot = 4 * cell + right + 2 * down;
         const c = child[slot];
         if (c === 0) {
@@ -203,7 +202,10 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
           continue;
         }
         const j = -c - 1;
-        if (depth >= MAX_DEPTH || (x[j] === x[i] && y[j] === y[i])) {
+        if (
+          depth >= MAX_DEPTH ||
+          (s[4 * j] === s[4 * i] && s[4 * j + 1] === s[4 * i + 1])
+        ) {
           next[i] = j;
           child[slot] = -(i + 1);
           break;
@@ -213,8 +215,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
         child[slot] = made;
         child[
           4 * made +
-            (x[j] >= x0 + half ? 1 : 0) +
-            2 * (y[j] >= y0 + half ? 1 : 0)
+            (s[4 * j] >= x0 + half ? 1 : 0) +
+            2 * (s[4 * j + 1] >= y0 + half ? 1 : 0)
         ] = c;
         cell = made;
       }
@@ -233,8 +235,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
         } else {
           for (let j = -c - 1; j >= 0; j = next[j]) {
             total++;
-            sumX += x[j];
-            sumY += y[j];
+            sumX += s[4 * j];
+            sumY += s[4 * j + 1];
           }
         }
       }
@@ -249,8 +251,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     // The first tick has no earlier push to keep.
     const every = ticks === 0 ? 1 : Math.max(1, Math.floor(layout.chargeEvery));
     for (let i = ticks % every; i < n; i += every) {
-      const xi = x[i];
-      const yi = y[i];
+      const xi = s[4 * i];
+      const yi = s[4 * i + 1];
       let ax = 0;
       let ay = 0;
       let top = 0;
@@ -289,8 +291,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
           }
           for (let j = -c - 1; j >= 0; j = next[j]) {
             if (j === i) continue;
-            let dx = x[j] - xi;
-            let dy = y[j] - yi;
+            let dx = s[4 * j] - xi;
+            let dy = s[4 * j + 1] - yi;
             if (dx === 0) dx = jiggle();
             if (dy === 0) dy = jiggle();
             let d2 = dx * dx + dy * dy;
@@ -307,8 +309,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       pushY[i] = ay;
     }
     for (let i = 0; i < n; i++) {
-      vx[i] += pushX[i] * alpha;
-      vy[i] += pushY[i] * alpha;
+      s[4 * i + 2] += pushX[i] * alpha;
+      s[4 * i + 3] += pushY[i] * alpha;
     }
     ticks++;
   }
@@ -317,8 +319,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     for (let l = 0; l < m; l++) {
       const a = links[2 * l];
       const b = links[2 * l + 1];
-      let dx = x[b] + vx[b] - x[a] - vx[a];
-      let dy = y[b] + vy[b] - y[a] - vy[a];
+      let dx = s[4 * b] + s[4 * b + 2] - s[4 * a] - s[4 * a + 2];
+      let dy = s[4 * b + 1] + s[4 * b + 3] - s[4 * a + 1] - s[4 * a + 3];
       if (dx === 0) dx = jiggle();
       if (dy === 0) dy = jiggle();
       const length = Math.sqrt(dx * dx + dy * dy);
@@ -327,10 +329,10 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       dx *= k;
       dy *= k;
       const bias = linkBias[l];
-      vx[b] -= dx * bias;
-      vy[b] -= dy * bias;
-      vx[a] += dx * (1 - bias);
-      vy[a] += dy * (1 - bias);
+      s[4 * b + 2] -= dx * bias;
+      s[4 * b + 3] -= dy * bias;
+      s[4 * a + 2] += dx * (1 - bias);
+      s[4 * a + 3] += dy * (1 - bias);
     }
   }
 
@@ -351,15 +353,15 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     gridHead.fill(-1);
     for (let i = 0; i < n; i++) {
       const k = slot(
-        Math.floor((x[i] + vx[i]) / gridSize),
-        Math.floor((y[i] + vy[i]) / gridSize)
+        Math.floor((s[4 * i] + s[4 * i + 2]) / gridSize),
+        Math.floor((s[4 * i + 1] + s[4 * i + 3]) / gridSize)
       );
       gridNext[i] = gridHead[k];
       gridHead[k] = i;
     }
     for (let i = 0; i < n; i++) {
-      const xi = x[i] + vx[i];
-      const yi = y[i] + vy[i];
+      const xi = s[4 * i] + s[4 * i + 2];
+      const yi = s[4 * i + 1] + s[4 * i + 3];
       const ri = radius[i] + COLLIDE_PAD;
       const cx = Math.floor(xi / gridSize);
       const cy = Math.floor(yi / gridSize);
@@ -373,8 +375,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
             if (c === 0 && j <= i) continue;
             const rj = radius[j] + COLLIDE_PAD;
             const r = ri + rj;
-            let dx = xi - x[j] - vx[j];
-            let dy = yi - y[j] - vy[j];
+            let dx = xi - s[4 * j] - s[4 * j + 2];
+            let dy = yi - s[4 * j + 1] - s[4 * j + 3];
             let d2 = dx * dx + dy * dy;
             if (d2 >= r * r) continue;
             if (dx === 0) d2 += (dx = jiggle()) * dx;
@@ -385,10 +387,10 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
             dy *= k;
             // The bigger node gives way less.
             const share = (rj * rj) / (ri * ri + rj * rj);
-            vx[i] += dx * share;
-            vy[i] += dy * share;
-            vx[j] -= dx * (1 - share);
-            vy[j] -= dy * (1 - share);
+            s[4 * i + 2] += dx * share;
+            s[4 * i + 3] += dy * share;
+            s[4 * j + 2] -= dx * (1 - share);
+            s[4 * j + 3] -= dy * (1 - share);
           }
         }
       }
@@ -396,8 +398,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   }
 
   const layout: ForceLayout = {
-    x,
-    y,
+    state: s,
     alpha: options.alpha,
     alphaTarget: 0,
     chargeEvery: 1,
@@ -408,26 +409,26 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       for (; placed < count; placed++) {
         const beside = anchor[placed];
         if (!fresh[placed] || beside < 0) continue;
-        x[placed] = x[beside] + jiggle() * 4e7;
-        y[placed] = y[beside] + jiggle() * 4e7;
+        s[4 * placed] = s[4 * beside] + jiggle() * 4e7;
+        s[4 * placed + 1] = s[4 * beside + 1] + jiggle() * 4e7;
       }
       layout.alpha += (layout.alphaTarget - layout.alpha) * options.alphaDecay;
       const alpha = layout.alpha;
       if (count > 1) charge(alpha, count);
       pull(alpha, linksAmong[count]);
       for (let i = 0; i < count; i++) {
-        vx[i] -= x[i] * options.centre * alpha;
-        vy[i] -= y[i] * options.centre * alpha;
+        s[4 * i + 2] -= s[4 * i] * options.centre * alpha;
+        s[4 * i + 3] -= s[4 * i + 1] * options.centre * alpha;
       }
       if (options.collide) collide(count);
       for (let i = 0; i < count; i++) {
         if (Number.isNaN(pinX[i])) {
-          x[i] += vx[i] *= VELOCITY_KEEP;
-          y[i] += vy[i] *= VELOCITY_KEEP;
+          s[4 * i] += s[4 * i + 2] *= VELOCITY_KEEP;
+          s[4 * i + 1] += s[4 * i + 3] *= VELOCITY_KEEP;
         } else {
-          x[i] = pinX[i];
-          y[i] = pinY[i];
-          vx[i] = vy[i] = 0;
+          s[4 * i] = pinX[i];
+          s[4 * i + 1] = pinY[i];
+          s[4 * i + 2] = s[4 * i + 3] = 0;
         }
       }
     },

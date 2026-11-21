@@ -6,11 +6,13 @@ import {
 } from '$lib/settings/store.svelte';
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
-  activePreset,
   applyPreset,
   deletePreset,
+  presetChanged,
+  renamePreset,
   resetSettings,
   savePreset,
+  selectedPreset,
   settingPresets
 } from './setting-presets';
 import {
@@ -64,6 +66,7 @@ beforeEach(() => {
 afterEach(async () => {
   await resetSettings(PLUGIN);
   await resetSettingValue(id('$presets'));
+  await resetSettingValue(id('$preset'));
   uninstallPluginSettingsBridge();
   resetPluginRegistry();
 });
@@ -81,11 +84,15 @@ describe('setting presets', () => {
     await setSettingValue(id('depth'), 3);
     await setSettingValue(id('tags'), false);
     await savePreset(PLUGIN, 'Deep');
-    expect(activePreset(PLUGIN)).toBe('Deep');
+    expect(selectedPreset(PLUGIN)).toBe('Deep');
+    expect(presetChanged(PLUGIN)).toBe(false);
 
+    // A changed setting leaves the preset in use, marked as changed.
     await setSettingValue(id('depth'), 2);
-    expect(activePreset(PLUGIN)).toBeUndefined();
+    expect(selectedPreset(PLUGIN)).toBe('Deep');
+    expect(presetChanged(PLUGIN)).toBe(true);
     await resetSettings(PLUGIN);
+    expect(selectedPreset(PLUGIN)).toBeUndefined();
     expect(getSettingValue(id('depth'))).toBe(1);
     expect(getSettingValue(id('tags'))).toBe(true);
 
@@ -106,6 +113,35 @@ describe('setting presets', () => {
     expect(settingPresets(PLUGIN)).toEqual([]);
     // Deleting a preset leaves the settings as they are.
     expect(getSettingValue(id('depth'))).toBe(4);
+  });
+
+  it('updates the preset in use in place, and renames it', async () => {
+    await savePreset(PLUGIN, 'First');
+    await setSettingValue(id('depth'), 5);
+    await savePreset(PLUGIN, 'Second');
+    await applyPreset(PLUGIN, 'First');
+    await setSettingValue(id('tags'), false);
+    await savePreset(PLUGIN, 'First');
+    expect(settingPresets(PLUGIN)).toEqual([
+      { name: 'First', values: { depth: 1, tags: false } },
+      { name: 'Second', values: { depth: 5, tags: true } }
+    ]);
+    expect(presetChanged(PLUGIN)).toBe(false);
+
+    await renamePreset(PLUGIN, 'First', 'Flat');
+    expect(settingPresets(PLUGIN).map((preset) => preset.name)).toEqual([
+      'Flat',
+      'Second'
+    ]);
+    expect(selectedPreset(PLUGIN)).toBe('Flat');
+    // A name that is taken goes to the renamed preset.
+    await renamePreset(PLUGIN, 'Flat', 'Second');
+    expect(settingPresets(PLUGIN)).toEqual([
+      { name: 'Second', values: { depth: 1, tags: false } }
+    ]);
+
+    await deletePreset(PLUGIN, 'Second');
+    expect(selectedPreset(PLUGIN)).toBeUndefined();
   });
 
   it('ignores stored presets it cannot read', async () => {
