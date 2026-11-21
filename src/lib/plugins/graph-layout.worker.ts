@@ -29,16 +29,33 @@ const FULL_STRENGTH_LINKS = 6;
 // settled rather than exploding outwards.
 const WARMUP_MS = 300;
 const FRAME_MS = 16;
+// Windows wakes a timer on a 15.6 ms beat unless something asks for finer:
+// a wait of 16 ms lasts 31. Asking for a little less lands on the first beat.
+const TIMER_SLACK_MS = 2;
 
 let version = 0;
 let layout: ForceLayout | undefined;
 let timer: ReturnType<typeof setTimeout> | null = null;
+// A growing layout: when it started and how long it takes.
+let grow: { from: number; ms: number; nodes: number } | undefined;
+let dragging = false;
+// What keeps a growing or dragged layout moving.
+const LIVELY = 0.3;
 // Repulsion is spread over up to this many ticks to keep a tick in a frame.
 const MAX_CHARGE_EVERY = 8;
 
 /** One tick, then repulsion spread wider or narrower by how long it took. */
 function tick(layout: ForceLayout) {
   const start = performance.now();
+  if (grow) {
+    // Slow at first, when each new node still changes the picture.
+    const done = Math.min((start - grow.from) / grow.ms, 1);
+    layout.active = Math.max(1, Math.ceil(grow.nodes * done * done));
+    if (done === 1) {
+      grow = undefined;
+      if (!dragging) layout.alphaTarget = 0;
+    }
+  }
   layout.tick();
   const took = performance.now() - start;
   if (took > FRAME_MS && layout.chargeEvery < MAX_CHARGE_EVERY)
@@ -50,7 +67,7 @@ function post() {
   if (!layout) return;
   const x = Float32Array.from(layout.x);
   const y = Float32Array.from(layout.y);
-  const message: LayoutPositions = { version, x, y };
+  const message: LayoutPositions = { version, active: layout.active, x, y };
   postMessage(message, { transfer: [x.buffer, y.buffer] });
 }
 
@@ -66,7 +83,7 @@ function run() {
   if (!layout.settled())
     timer = setTimeout(
       run,
-      Math.max(0, FRAME_MS - (performance.now() - start))
+      Math.max(0, FRAME_MS - TIMER_SLACK_MS - (performance.now() - start))
     );
 }
 
@@ -103,7 +120,17 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
             (FULL_STRENGTH_LINKS * request.radius.length) / request.links.length
           )
       });
-      if (request.warmup) {
+      dragging = false;
+      grow = undefined;
+      if (request.grow) {
+        grow = {
+          from: performance.now(),
+          ms: request.grow,
+          nodes: request.radius.length
+        };
+        layout.active = 0;
+        layout.alphaTarget = LIVELY;
+      } else if (request.warmup) {
         const until = performance.now() + WARMUP_MS;
         while (performance.now() < until && !layout.settled()) tick(layout);
       }
@@ -114,14 +141,16 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
     case 'drag': {
       if (request.version !== version || !layout) return;
       layout.pin(request.index, request);
-      layout.alphaTarget = 0.3;
+      dragging = true;
+      layout.alphaTarget = LIVELY;
       wake();
       return;
     }
     case 'release': {
       if (request.version !== version || !layout) return;
       layout.pin(request.index, undefined);
-      layout.alphaTarget = 0;
+      dragging = false;
+      if (!grow) layout.alphaTarget = 0;
       wake();
       return;
     }

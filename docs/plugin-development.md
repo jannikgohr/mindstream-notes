@@ -669,6 +669,11 @@ draws nothing; `orphans: false` leaves out nodes without links. Clicking a node
 sends `onSelect` with its ID. The layout runs off the page, so a graph of tens
 of thousands of nodes stays responsive. The Graph plugin is the example.
 
+A graph without a `focus` grows into place when it first shows, the oldest
+note first and a plugin's own node with the first note it is linked to. A
+button replays that. Someone who asked their system for less motion gets the
+finished graph at once.
+
 `forces` (`{ centre?, repel?, link?, linkDistance? }`) tunes the layout: the
 first three are shares of the usual strength, from 0 to 2, and `linkDistance`
 is the length a link rests at, from 10 to 200 with 40 the usual.

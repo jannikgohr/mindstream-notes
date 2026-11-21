@@ -77,6 +77,24 @@ describe('createForceLayout', () => {
     expect(closest).toBeGreaterThanOrEqual(8);
   });
 
+  it('grows: a node stays out until it is active, then joins by its link', () => {
+    // A chain 0-1-2 and a far-off start for the last node.
+    const layout = layoutOf(3, [0, 1, 1, 2]);
+    layout.active = 2;
+    const [restX, restY] = [layout.x[2], layout.y[2]];
+    for (let i = 0; i < 50; i++) layout.tick();
+    expect([layout.x[2], layout.y[2]]).toEqual([restX, restY]);
+    // The hidden node's link pulled nothing: the two rest as a lone pair.
+    expect(distance(layout, 0, 1)).toBeGreaterThan(40);
+
+    layout.active = 3;
+    layout.tick();
+    expect(distance(layout, 1, 2)).toBeLessThan(60);
+    layout.alpha = 1;
+    settle(layout);
+    expect(distance(layout, 0, 2)).toBeGreaterThan(distance(layout, 1, 2));
+  });
+
   it('groups far nodes without changing where the layout pushes', () => {
     // One tick from the same start, exact against grouped: the moves agree.
     const n = 400;

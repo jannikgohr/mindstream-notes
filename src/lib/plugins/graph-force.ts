@@ -17,7 +17,10 @@ export interface ForceOptions {
   /** Starting positions; NaN lets the layout place the node. */
   x: Float32Array;
   y: Float32Array;
-  /** Index pairs. */
+  /**
+   * Index pairs. For `active` to hide links, they are ordered by the higher
+   * of their two ends.
+   */
   links: Uint32Array;
   alpha: number;
   /** How fast the layout cools, per tick. */
@@ -55,6 +58,11 @@ export interface ForceLayout {
    * and a node's push changes little from one tick to the next.
    */
   chargeEvery: number;
+  /**
+   * Only the first this many nodes are laid out, and the links among them.
+   * Raising it lets a graph grow: a node joins beside one it is linked to.
+   */
+  active: number;
   tick(): void;
   settled(): boolean;
   /** Hold a node at a point, or let it go with `undefined`. */
@@ -96,6 +104,23 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     linkStrength[l] = options.linkStrength / Math.min(a, b);
     linkBias[l] = a / (a + b);
   }
+
+  // A node that joins later starts beside a node before it that it links to.
+  const anchor = new Int32Array(n).fill(-1);
+  // How many links lie among the first k nodes, for each k.
+  const linksAmong = new Uint32Array(n + 1);
+  for (let l = 0; l < m; l++) {
+    const a = links[2 * l];
+    const b = links[2 * l + 1];
+    const [low, high] = a < b ? [a, b] : [b, a];
+    if (anchor[high] < 0 && low !== high) anchor[high] = low;
+    linksAmong[high + 1]++;
+  }
+  for (let k = 1; k <= n; k++) linksAmong[k] += linksAmong[k - 1];
+  const fresh = Uint8Array.from(options.x, (value) =>
+    Number.isNaN(value) ? 1 : 0
+  );
+  let placed = n;
 
   let seed = 1;
   /** A tiny offset, so two nodes in one place have a direction to part in. */
@@ -143,7 +168,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   const pushY = new Float64Array(n);
   let ticks = 0;
 
-  function charge(alpha: number) {
+  function charge(alpha: number, n: number) {
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
     for (let i = 0; i < n; i++) {
       if (x[i] < minX) minX = x[i];
@@ -288,7 +313,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     ticks++;
   }
 
-  function pull(alpha: number) {
+  function pull(alpha: number, m: number) {
     for (let l = 0; l < m; l++) {
       const a = links[2 * l];
       const b = links[2 * l + 1];
@@ -322,7 +347,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   const slot = (cx: number, cy: number) =>
     (Math.imul(cx, 73856093) ^ Math.imul(cy, 19349663)) & (slots - 1);
 
-  function collide() {
+  function collide(n: number) {
     gridHead.fill(-1);
     for (let i = 0; i < n; i++) {
       const k = slot(
@@ -376,17 +401,26 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
     alpha: options.alpha,
     alphaTarget: 0,
     chargeEvery: 1,
+    active: n,
     tick() {
+      const count = Math.min(Math.max(Math.floor(layout.active), 0), n);
+      if (count < placed) placed = count;
+      for (; placed < count; placed++) {
+        const beside = anchor[placed];
+        if (!fresh[placed] || beside < 0) continue;
+        x[placed] = x[beside] + jiggle() * 4e7;
+        y[placed] = y[beside] + jiggle() * 4e7;
+      }
       layout.alpha += (layout.alphaTarget - layout.alpha) * options.alphaDecay;
       const alpha = layout.alpha;
-      if (n > 1) charge(alpha);
-      pull(alpha);
-      for (let i = 0; i < n; i++) {
+      if (count > 1) charge(alpha, count);
+      pull(alpha, linksAmong[count]);
+      for (let i = 0; i < count; i++) {
         vx[i] -= x[i] * options.centre * alpha;
         vy[i] -= y[i] * options.centre * alpha;
       }
-      if (options.collide) collide();
-      for (let i = 0; i < n; i++) {
+      if (options.collide) collide(count);
+      for (let i = 0; i < count; i++) {
         if (Number.isNaN(pinX[i])) {
           x[i] += vx[i] *= VELOCITY_KEEP;
           y[i] += vy[i] *= VELOCITY_KEEP;

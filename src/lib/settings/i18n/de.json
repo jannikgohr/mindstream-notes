@@ -462,6 +462,7 @@
     "presets.save": "Speichern",
     "presets.delete": "Diese Voreinstellung löschen",
     "presets.reset": "Auf Standard zurücksetzen",
+    "graph.replay": "Wachstum des Graphen erneut abspielen",
     "graph.open": "Öffnen",
     "fab.newNote": "Neue Notiz",
     "fab.menu": "Erstellen",

@@ -16,6 +16,8 @@ it, and follows you as you switch notes. The whole vault is only in the tab.
 - Drag a note to move it and scroll to zoom. To move the view, drag the
   background, or drag anywhere with the middle or right mouse button. Names appear as you zoom in, the biggest notes first.
 - Point at a note to highlight what it's linked with.
+- The whole vault grows into place when you open it, oldest note first. The
+  play button in the top right corner shows that again, in either graph.
 
 On a phone, the graph button above your notes opens the whole vault. Tap a note
 to highlight what it's linked with, then **Open** to open it. Drag with one

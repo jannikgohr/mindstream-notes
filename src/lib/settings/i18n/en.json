@@ -632,6 +632,7 @@
     "presets.save": "Save",
     "presets.delete": "Delete this preset",
     "presets.reset": "Reset to defaults",
+    "graph.replay": "Replay how the graph grew",
     "graph.open": "Open",
     "fab.newNote": "New note",
     "fab.menu": "Create",
