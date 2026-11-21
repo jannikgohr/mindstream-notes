@@ -83,12 +83,16 @@ fn sanitize_width(value: f32) -> f32 {
 /// what the page says.
 pub fn signature(strokes: &[Stroke]) -> String {
     let mut hash: u32 = 0x811c_9dc5;
-    let mut mix = |n: i64| hash = (hash ^ (n as u32 & 0xffff)).wrapping_mul(0x0100_0193);
+    let mut mix = |n: i32| {
+        for byte in n.to_le_bytes() {
+            hash = (hash ^ byte as u32).wrapping_mul(0x0100_0193);
+        }
+    };
     for stroke in strokes {
-        mix(stroke.points.len() as i64);
+        mix(stroke.points.len() as i32);
         for point in &stroke.points {
-            mix(point.x.round() as i64);
-            mix(point.y.round() as i64);
+            mix(point.x.round() as i32);
+            mix(point.y.round() as i32);
         }
     }
     format!("{}:{}", strokes.len(), base36(hash))
@@ -109,18 +113,21 @@ fn base36(mut n: u32) -> String {
 pub const PADDING: f32 = 24.0;
 pub const MAX_SIDE: f32 = 1600.0;
 
-/// The strokes alone, cropped to their bounds with `PADDING`, on white,
+/// The strokes alone, cropped to their painted bounds with `PADDING`, on white,
 /// scaled down to at most `MAX_SIDE` per side, as PNG. `None` when there is
 /// nothing to draw. It does not need to match the editor canvas.
 pub fn render_png(strokes: &[Stroke]) -> Option<Vec<u8>> {
     let finite = |p: &&Point| p.x.is_finite() && p.y.is_finite();
     let (mut min_x, mut min_y) = (f32::INFINITY, f32::INFINITY);
     let (mut max_x, mut max_y) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for point in strokes.iter().flat_map(|s| s.points.iter().filter(finite)) {
-        min_x = min_x.min(point.x);
-        min_y = min_y.min(point.y);
-        max_x = max_x.max(point.x);
-        max_y = max_y.max(point.y);
+    for stroke in strokes {
+        let radius = stroke.width / 2.0;
+        for point in stroke.points.iter().filter(finite) {
+            min_x = min_x.min(point.x - radius);
+            min_y = min_y.min(point.y - radius);
+            max_x = max_x.max(point.x + radius);
+            max_y = max_y.max(point.y + radius);
+        }
     }
     if min_x > max_x {
         return None;

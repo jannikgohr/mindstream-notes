@@ -171,15 +171,9 @@ pub fn ink_pages(state: &[u8]) -> Vec<InkPage> {
 
     // Strokes owned by a page are stored in its coordinates, the rest in
     // document coordinates. A stroke owned by a missing page is hidden.
-    let known = |owner: &Option<String>| match owner {
-        Some(id) => pages.iter().any(|(page, _, _)| page == id),
-        None => true,
-    };
-    let visible: Vec<_> = visible
-        .into_iter()
-        .filter(|(owner, _)| known(owner))
-        .collect();
+    let mut visible = visible;
     if records.len(&txn) == 0 {
+        visible.retain(|(owner, _)| owner.is_none());
         let max_y = visible
             .iter()
             .flat_map(|(_, stroke)| stroke.points.iter().map(|p| p.y as f64))

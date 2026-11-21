@@ -88,7 +88,7 @@ fn rejects_malformed_payloads() {
 fn signature_follows_geometry_not_style() {
     let page = vec![stroke(&[(10.0, 10.0), (20.4, 30.0)]), stroke(&[(5.0, 5.0)])];
     // Stored in notes: changing it makes every recognizer read every page again.
-    assert_eq!(signature(&page), "2:12ufyzk");
+    assert_eq!(signature(&page), "2:14n43u4");
     assert_eq!(signature(&[]), "0:ztntfp");
 
     let mut restyled = page.clone();
@@ -107,12 +107,17 @@ fn decode_png(bytes: &[u8]) -> Pixmap {
 
 #[test]
 fn renders_strokes_cropped_with_padding_on_white() {
-    let image = decode_png(&render_png(&[stroke(&[(100.0, 200.0), (300.0, 200.0)])]).unwrap());
-    assert_eq!((image.width(), image.height()), (248, 48));
+    let mut wide = stroke(&[(100.0, 200.0), (300.0, 200.0)]);
+    wide.width = 64.0;
+    let image = decode_png(&render_png(&[wide]).unwrap());
+    // The painted edge, not the centre line, gets the padding.
+    assert_eq!((image.width(), image.height()), (312, 112));
     let at = |x, y| image.pixel(x, y).unwrap();
-    assert_eq!(at(0, 0).red(), 255);
-    assert_eq!(at(124, 24).red(), 0);
-    assert_eq!(at(124, 24).alpha(), 255);
+    assert_eq!(at(156, 0).red(), 255);
+    assert_eq!(at(156, 22).red(), 255);
+    assert_eq!(at(156, 26).red(), 0);
+    assert_eq!(at(156, 56).alpha(), 255);
+    assert_eq!(at(156, 56).red(), 0);
 }
 
 #[test]
