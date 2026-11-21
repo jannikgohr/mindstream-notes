@@ -64,7 +64,8 @@ export interface GraphFrame {
   /** PALETTE_SIZE colours, four floats each; the last is the accent. */
   palette: Float32Array;
   link: Rgba;
-  litLink: Rgba;
+  /** The lit links in runs, each a count of link ends and its colour. */
+  litLinks: { ends: number; colour: Rgba }[];
   /** Some nodes are lit: the rest are drawn faint, under them. */
   dimOthers: boolean;
 }
@@ -73,7 +74,7 @@ export interface GraphRenderer {
   setScene(scene: GraphScene): void;
   setStyles(styles: Uint8Array): void;
   setPositions(x: Float32Array, y: Float32Array): void;
-  /** The links drawn again on top, in `litLink`. */
+  /** The links drawn again on top, in the colours of `litLinks`. */
   setLitLinks(links: Uint32Array): void;
   draw(frame: GraphFrame): void;
   destroy(): void;
@@ -298,9 +299,15 @@ export function createGraphRenderer(
         gl.drawElements(gl.LINES, linkCount, gl.UNSIGNED_INT, 0);
       }
       if (litCount) {
-        gl.uniform4fv(linkUniforms.colour, frame.litLink);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, litIndex);
-        gl.drawElements(gl.LINES, litCount, gl.UNSIGNED_INT, 0);
+        let from = 0;
+        for (const run of frame.litLinks) {
+          const ends = Math.min(run.ends, litCount - from);
+          if (ends <= 0) continue;
+          gl.uniform4fv(linkUniforms.colour, run.colour);
+          gl.drawElements(gl.LINES, ends, gl.UNSIGNED_INT, from * 4);
+          from += ends;
+        }
       }
 
       gl.useProgram(nodeProgram);

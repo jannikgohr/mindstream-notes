@@ -1,5 +1,20 @@
 /** Messages between a `graph` view and its layout worker. */
 
+/** Each force as a share of its usual strength, and the link length. */
+export interface LayoutForces {
+  centre: number;
+  repel: number;
+  link: number;
+  linkDistance: number;
+}
+
+export const DEFAULT_FORCES: LayoutForces = {
+  centre: 1,
+  repel: 1,
+  link: 1,
+  linkDistance: 40
+};
+
 export type LayoutRequest =
   | {
       type: 'layout';
@@ -14,6 +29,7 @@ export type LayoutRequest =
       alpha: number;
       /** Settle before sending the first positions. */
       warmup: boolean;
+      forces: LayoutForces;
     }
   | { type: 'drag'; version: number; index: number; x: number; y: number }
   | { type: 'release'; version: number; index: number };

@@ -106,6 +106,21 @@ export type ViewNode =
       depth: number;
       /** Draw notes without links. */
       orphans: boolean;
+      /**
+       * Each force as a share of its usual strength (0 to 2), and the length
+       * a link rests at (10 to 200). Left out, the usual ones.
+       */
+      forces?: {
+        centre?: number;
+        repel?: number;
+        link?: number;
+        linkDistance?: number;
+      };
+      /**
+       * Colour the notes around the hovered or focused one by whether it
+       * links to them, they link to it, or both.
+       */
+      directions: boolean;
       /** Event sent with the clicked node's ID as `value`. */
       onSelect: string;
     };
@@ -356,6 +371,11 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
         typeof value.depth === 'number' && Number.isInteger(value.depth)
           ? Math.min(Math.max(value.depth, 1), MAX_GRAPH_DEPTH)
           : 1;
+      const within = (raw: unknown, min: number, max: number) =>
+        typeof raw === 'number' && Number.isFinite(raw)
+          ? Math.min(Math.max(raw, min), max)
+          : undefined;
+      const forces = isObject(value.forces) ? value.forces : {};
       return {
         type: 'graph',
         nodes,
@@ -363,6 +383,13 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
         focus: text(value.focus),
         depth,
         orphans: value.orphans !== false,
+        forces: {
+          centre: within(forces.centre, 0, 2),
+          repel: within(forces.repel, 0, 2),
+          link: within(forces.link, 0, 2),
+          linkDistance: within(forces.linkDistance, 10, 200)
+        },
+        directions: value.directions === true,
         onSelect
       };
     }

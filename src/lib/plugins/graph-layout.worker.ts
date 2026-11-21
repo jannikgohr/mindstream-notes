@@ -20,6 +20,7 @@ const LARGE_ALPHA_DECAY = 0.05;
 const ALPHA_DECAY = 1 - 0.001 ** (1 / 300);
 const NEAR = 400;
 const CENTRE = 0.04;
+const REPEL = 60;
 // With more links a node than this, links pull in proportion less. At full
 // strength they squeeze a densely linked vault into a lopsided clump with
 // its unlinked notes far outside; this keeps it a disc.
@@ -92,11 +93,15 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
         // Coarser grouping settles a big graph into the same shape, sooner.
         theta: large ? 1.2 : 0.9,
         collide: true,
-        centre: large ? 2 * CENTRE : CENTRE,
-        linkStrength: Math.min(
-          1,
-          (FULL_STRENGTH_LINKS * request.radius.length) / request.links.length
-        )
+        centre: (large ? 2 * CENTRE : CENTRE) * request.forces.centre,
+        repel: REPEL * request.forces.repel,
+        linkDistance: request.forces.linkDistance,
+        linkStrength:
+          request.forces.link *
+          Math.min(
+            1,
+            (FULL_STRENGTH_LINKS * request.radius.length) / request.links.length
+          )
       });
       if (request.warmup) {
         const until = performance.now() + WARMUP_MS;

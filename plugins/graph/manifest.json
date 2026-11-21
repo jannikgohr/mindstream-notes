@@ -64,7 +64,6 @@
         "view.showLocal": "Back to the open note",
         "view.showVault": "Show the whole vault",
         "view.noActiveNote": "Open a note to see the notes it's linked with.",
-        "settings.graph.title": "Graph",
         "settings.colorBy.label": "Colour notes by",
         "settings.colorBy.description": "Notes in the same top-level folder, or with the same first tag, share a colour.",
         "settings.colorBy.folder": "Folder",
@@ -78,7 +77,22 @@
         "action.openGraph": "Open graph view",
         "command.openGraph": "Open graph view",
         "settings.tags.label": "Show tags",
-        "settings.tags.description": "Draw each tag as a node, linked to the notes that have it. Click a tag to see only its notes."
+        "settings.tags.description": "Draw each tag as a node, linked to the notes that have it. Click a tag to see only its notes.",
+        "settings.filters.title": "Graph: filters",
+        "settings.colors.title": "Graph: colours",
+        "settings.forces.title": "Graph: forces",
+        "settings.search.label": "Show only notes with",
+        "settings.search.description": "Text in a note's title, folder or tag. Empty shows every note.",
+        "settings.directions.label": "Colour links by direction",
+        "settings.directions.description": "Around the note you point at, or the open note in the local graph: notes it links to, notes that link to it, and notes that do both each get their own colour.",
+        "settings.centerForce.label": "Pull to the centre",
+        "settings.centerForce.description": "How tightly the graph is drawn together, in percent of the usual.",
+        "settings.repelForce.label": "Push apart",
+        "settings.repelForce.description": "How hard notes push each other away, in percent of the usual.",
+        "settings.linkForce.label": "Link pull",
+        "settings.linkForce.description": "How hard a link pulls its two notes together, in percent of the usual.",
+        "settings.linkDistance.label": "Link length",
+        "settings.linkDistance.description": "How long a link wants to be, in percent of the usual."
       },
       "de": {
         "plugin.description": "Deine Notizen, ihre Schlagwörter und Verknüpfungen als Graph.",
@@ -86,7 +100,6 @@
         "view.showLocal": "Zurück zur offenen Notiz",
         "view.showVault": "Ganzen Tresor zeigen",
         "view.noActiveNote": "Öffne eine Notiz, um zu sehen, mit welchen Notizen sie verknüpft ist.",
-        "settings.graph.title": "Graph",
         "settings.colorBy.label": "Notizen einfärben nach",
         "settings.colorBy.description": "Notizen im selben obersten Ordner oder mit demselben ersten Schlagwort haben dieselbe Farbe.",
         "settings.colorBy.folder": "Ordner",
@@ -100,13 +113,69 @@
         "action.openGraph": "Graphansicht öffnen",
         "command.openGraph": "Graphansicht öffnen",
         "settings.tags.label": "Schlagwörter zeigen",
-        "settings.tags.description": "Jedes Schlagwort als Knoten zeichnen, verbunden mit den Notizen, die es tragen. Klicke auf ein Schlagwort, um nur seine Notizen zu sehen."
+        "settings.tags.description": "Jedes Schlagwort als Knoten zeichnen, verbunden mit den Notizen, die es tragen. Klicke auf ein Schlagwort, um nur seine Notizen zu sehen.",
+        "settings.filters.title": "Graph: Filter",
+        "settings.colors.title": "Graph: Farben",
+        "settings.forces.title": "Graph: Kräfte",
+        "settings.search.label": "Nur Notizen zeigen mit",
+        "settings.search.description": "Text im Titel, Ordner oder Schlagwort einer Notiz. Leer zeigt alle Notizen.",
+        "settings.directions.label": "Verknüpfungen nach Richtung färben",
+        "settings.directions.description": "Rund um die Notiz, auf die du zeigst, oder die offene Notiz im lokalen Graphen: Notizen, auf die sie verweist, Notizen, die auf sie verweisen, und Notizen, die beides tun, bekommen je eine eigene Farbe.",
+        "settings.centerForce.label": "Zug zur Mitte",
+        "settings.centerForce.description": "Wie eng der Graph zusammengezogen wird, in Prozent des Üblichen.",
+        "settings.repelForce.label": "Abstoßung",
+        "settings.repelForce.description": "Wie stark Notizen einander wegdrücken, in Prozent des Üblichen.",
+        "settings.linkForce.label": "Zug der Verknüpfungen",
+        "settings.linkForce.description": "Wie stark eine Verknüpfung ihre beiden Notizen zusammenzieht, in Prozent des Üblichen.",
+        "settings.linkDistance.label": "Länge der Verknüpfungen",
+        "settings.linkDistance.description": "Wie lang eine Verknüpfung sein möchte, in Prozent des Üblichen."
       }
     },
     "settings": [
       {
-        "sectionId": "graph",
-        "titleKey": "settings.graph.title",
+        "sectionId": "filters",
+        "titleKey": "settings.filters.title",
+        "settings": [
+          {
+            "id": "search",
+            "labelKey": "settings.search.label",
+            "descriptionKey": "settings.search.description",
+            "scope": "V",
+            "type": "text",
+            "default": ""
+          },
+          {
+            "id": "tags",
+            "labelKey": "settings.tags.label",
+            "descriptionKey": "settings.tags.description",
+            "scope": "V",
+            "type": "toggle",
+            "default": true
+          },
+          {
+            "id": "orphans",
+            "labelKey": "settings.orphans.label",
+            "descriptionKey": "settings.orphans.description",
+            "scope": "V",
+            "type": "toggle",
+            "default": true
+          },
+          {
+            "id": "depth",
+            "labelKey": "settings.depth.label",
+            "descriptionKey": "settings.depth.description",
+            "scope": "V",
+            "type": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 5,
+            "step": 1
+          }
+        ]
+      },
+      {
+        "sectionId": "colors",
+        "titleKey": "settings.colors.title",
         "settings": [
           {
             "id": "color-by",
@@ -123,31 +192,62 @@
             }
           },
           {
-            "id": "orphans",
-            "labelKey": "settings.orphans.label",
-            "descriptionKey": "settings.orphans.description",
+            "id": "directions",
+            "labelKey": "settings.directions.label",
+            "descriptionKey": "settings.directions.description",
             "scope": "V",
             "type": "toggle",
             "default": true
-          },
+          }
+        ]
+      },
+      {
+        "sectionId": "forces",
+        "titleKey": "settings.forces.title",
+        "settings": [
           {
-            "id": "tags",
-            "labelKey": "settings.tags.label",
-            "descriptionKey": "settings.tags.description",
-            "scope": "V",
-            "type": "toggle",
-            "default": true
-          },
-          {
-            "id": "depth",
-            "labelKey": "settings.depth.label",
-            "descriptionKey": "settings.depth.description",
+            "id": "center-force",
+            "labelKey": "settings.centerForce.label",
+            "descriptionKey": "settings.centerForce.description",
             "scope": "V",
             "type": "slider",
-            "default": 1,
-            "min": 1,
-            "max": 5,
-            "step": 1
+            "default": 100,
+            "min": 0,
+            "max": 200,
+            "step": 10
+          },
+          {
+            "id": "repel-force",
+            "labelKey": "settings.repelForce.label",
+            "descriptionKey": "settings.repelForce.description",
+            "scope": "V",
+            "type": "slider",
+            "default": 100,
+            "min": 0,
+            "max": 200,
+            "step": 10
+          },
+          {
+            "id": "link-force",
+            "labelKey": "settings.linkForce.label",
+            "descriptionKey": "settings.linkForce.description",
+            "scope": "V",
+            "type": "slider",
+            "default": 100,
+            "min": 0,
+            "max": 200,
+            "step": 10
+          },
+          {
+            "id": "link-distance",
+            "labelKey": "settings.linkDistance.label",
+            "descriptionKey": "settings.linkDistance.description",
+            "scope": "V",
+            "type": "slider",
+            "default": 100,
+            "min": 30,
+            "max": 300,
+            "step": 10
           }
         ]
       }

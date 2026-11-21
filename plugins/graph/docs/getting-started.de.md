@@ -36,15 +36,43 @@ Markdown-Notizen sind, werden nicht gezeigt.
 
 ## Einstellungen
 
-- **Notizen einfärben nach**: nach dem obersten Ordner, dem alphabetisch ersten
-  Schlagwort oder gar nicht.
+Der Knopf oben rechts im Graphen öffnet seine Einstellungen daneben. Es sind
+dieselben wie unter **Einstellungen → Plugins**, und beide Graphen teilen sie.
+
+Filter:
+
+- **Nur Notizen zeigen mit**: Text, der im Titel, Ordner oder in den
+  Schlagwörtern einer Notiz gesucht wird. Leer zeigt alle Notizen.
 - **Schlagwörter zeigen**: ob Schlagwörter gezeichnet werden, verbunden mit
   ihren Notizen.
 - **Unverknüpfte Notizen zeigen**: ob Notizen und Schlagwörter ohne
   Verknüpfungen gezeichnet werden.
 - **Verknüpfungstiefe um die offene Notiz**: wie weit der lokale Graph oder der
-  Graph um ein angeklicktes Schlagwort reicht. Bei 1 erscheint nur, was direkt
+  Graph um ein angeklicktes Schlagwort reicht. 1 zeigt nur, was direkt
   verknüpft ist.
+
+Farben:
+
+- **Notizen einfärben nach**: nach dem obersten Ordner, dem alphabetisch ersten
+  Schlagwort oder gar nicht.
+- **Verknüpfungen nach Richtung färben**: rund um die Notiz, auf die du zeigst,
+  und um die offene Notiz im lokalen Graphen bekommen Notizen, auf die sie
+  verweist, Notizen, die auf sie verweisen, und Notizen, die beides tun, je
+  eine eigene Farbe. Eine Legende benennt sie.
+
+Kräfte, jeweils in Prozent des Üblichen:
+
+- **Zug zur Mitte**: wie eng der Graph zusammengezogen wird.
+- **Abstoßung**: wie stark Notizen einander wegdrücken.
+- **Zug der Verknüpfungen**: wie stark eine Verknüpfung ihre beiden Notizen
+  zusammenzieht.
+- **Länge der Verknüpfungen**: wie lang eine Verknüpfung sein möchte.
+
+**Voreinstellungen** halten einen Satz dieser Einstellungen unter einem Namen
+fest. Gib einen Namen ein und drücke **Speichern**, dann wähle die
+Voreinstellung aus der Liste, um die Einstellungen zurückzuholen. Speichern
+unter einem vorhandenen Namen ersetzt diese Voreinstellung. **Standard** in der
+Liste und **Auf Standard zurücksetzen** setzen jede Einstellung zurück.
 
 ## Entfernen
 

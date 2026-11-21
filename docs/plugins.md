@@ -67,8 +67,9 @@ Obsidian's graph view. **Open graph view**, from the command palette or the
 **Local graph** sidebar view, opens the whole vault as a tab. **Local graph**
 in the sidebar shows the open note and the notes near it. Click a note to open
 it, click a tag to see only its notes, drag to move notes or the view, and
-scroll to zoom. In its settings, pick what colours the notes, whether tags and
-unlinked notes show, and how far the local graph reaches.
+scroll to zoom. The button in the graph's corner opens its settings beside it:
+filters, colours, the forces of the layout, and presets to keep a set of them
+under a name.
 
 It can read the titles, tags and folders of your notes. The app finds the
 links itself, so the plugin never reads what your notes say.

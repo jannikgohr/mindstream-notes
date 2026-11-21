@@ -27,12 +27,37 @@ A link is a link to another note in the note's text, such as one made with
 
 ## Settings
 
-- **Colour notes by**: the top-level folder, the first tag in alphabetical
-  order, or nothing.
+The button in the graph's top right corner opens its settings beside it. They
+are the same ones as under **Settings → Plugins**, and both graphs share them.
+
+Filters:
+
+- **Show only notes with**: text to look for in a note's title, folder or
+  tags. Empty shows every note.
 - **Show tags**: whether tags are drawn, linked to their notes.
 - **Show unlinked notes**: whether notes and tags without any links are drawn.
 - **Link depth around the open note**: how far the local graph, or the graph
   around a clicked tag, reaches. 1 shows only what is linked directly.
+
+Colours:
+
+- **Colour notes by**: the top-level folder, the first tag in alphabetical
+  order, or nothing.
+- **Colour links by direction**: around the note you point at, and around the
+  open note in the local graph, notes it links to, notes that link to it and
+  notes that do both each get their own colour. A legend names them.
+
+Forces, each in percent of the usual:
+
+- **Pull to the centre**: how tightly the graph is drawn together.
+- **Push apart**: how hard notes push each other away.
+- **Link pull**: how hard a link pulls its two notes together.
+- **Link length**: how long a link wants to be.
+
+**Presets** keep a set of these settings under a name. Type a name and press
+**Save**, then pick the preset from the list to bring the settings back.
+Saving under a name that exists replaces that preset. **Defaults** in the list
+and **Reset to defaults** put every setting back.
 
 ## Removing it
 

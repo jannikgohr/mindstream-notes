@@ -17,6 +17,8 @@ function layoutOf(
     theta: 0.9,
     collide: true,
     centre: 0.04,
+    repel: 60,
+    linkDistance: 40,
     linkStrength: 1,
     ...overrides
   });

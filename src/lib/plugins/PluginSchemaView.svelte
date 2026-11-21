@@ -182,6 +182,7 @@
     />
   {:else if n.type === 'graph'}
     <SchemaGraph
+      {pluginId}
       node={n}
       onEvent={(event, value) => dispatch({ event }, value)}
     />
