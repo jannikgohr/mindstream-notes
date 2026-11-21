@@ -8,14 +8,13 @@ Run it from the command palette, where you can give it a shortcut, or from the
 **Local graph** view in the sidebar.
 
 **Local graph** in the sidebar shows the open note and the notes and tags near
-it, and follows you as you switch notes. **Show the whole vault** there draws
-everything instead.
+it, and follows you as you switch notes. The whole vault is only in the tab.
 
 - Click a note to open it.
-- Click a tag to see only the notes near it. **Show the whole vault** goes
-  back.
-- Drag a note to move it, drag the background to move the view, and scroll to
-  zoom. Names appear as you zoom in, the biggest notes first.
+- Click a tag to see only the notes near it. **Show the whole vault** in the
+  tab, or **Back to the open note** in the sidebar, goes back.
+- Drag a note to move it and scroll to zoom. To move the view, drag the
+  background, or drag anywhere with the middle or right mouse button. Names appear as you zoom in, the biggest notes first.
 - Point at a note to highlight what it's linked with.
 
 A link is a link to another note in the note's text, such as one made with
