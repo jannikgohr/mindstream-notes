@@ -132,6 +132,7 @@ export enum TauriCommandName {
   ListIncomingShares = 'list_incoming_shares',
   ListNoteVersions = 'list_note_versions',
   ListNotes = 'list_notes',
+  ListNoteLinks = 'list_note_links',
   ListShareLinks = 'list_share_links',
   ListProfiles = 'list_profiles',
   ListSignatures = 'list_signatures',

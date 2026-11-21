@@ -1,0 +1,156 @@
+{
+  "manifestVersion": 2,
+  "id": "com.mindstream.graph",
+  "name": "Graph",
+  "version": "1.0.0",
+  "author": "Mindstream",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "descriptionKey": "plugin.description",
+  "icon": "icons/graph.svg",
+  "permissions": ["notes.read"],
+  "contributes": {
+    "documentation": [
+      {
+        "file": "docs/getting-started.md"
+      }
+    ],
+    "sidebarViews": [
+      {
+        "id": "graph",
+        "labelKey": "view.label",
+        "icon": "icons/graph.svg",
+        "render": {
+          "type": "schema",
+          "render": "render",
+          "onEvent": "onEvent"
+        },
+        "actions": [
+          {
+            "id": "open-graph",
+            "labelKey": "action.openGraph",
+            "icon": "icons/graph.svg"
+          }
+        ]
+      }
+    ],
+    "tabViews": [
+      {
+        "id": "graph",
+        "labelKey": "tab.label",
+        "icon": "icons/graph.svg",
+        "render": {
+          "type": "schema",
+          "render": "renderTab",
+          "onEvent": "onEvent"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "open-graph",
+        "labelKey": "command.openGraph",
+        "defaultBinding": null,
+        "action": {
+          "type": "script",
+          "export": "openGraph"
+        }
+      }
+    ],
+    "i18n": {
+      "en": {
+        "plugin.description": "Your notes, their tags and the links between them, as a graph.",
+        "view.label": "Local graph",
+        "view.showLocal": "Show only the open note's links",
+        "view.showVault": "Show the whole vault",
+        "view.noActiveNote": "Open a note to see the notes it's linked with.",
+        "settings.graph.title": "Graph",
+        "settings.colorBy.label": "Colour notes by",
+        "settings.colorBy.description": "Notes in the same top-level folder, or with the same first tag, share a colour.",
+        "settings.colorBy.folder": "Folder",
+        "settings.colorBy.tag": "Tag",
+        "settings.colorBy.none": "Nothing",
+        "settings.orphans.label": "Show unlinked notes",
+        "settings.orphans.description": "Include notes that link to no other note and that no note links to.",
+        "settings.depth.label": "Link depth around the open note",
+        "settings.depth.description": "How many links away from the open note, or a clicked tag, a note can be and still show.",
+        "tab.label": "Graph",
+        "action.openGraph": "Open graph view",
+        "command.openGraph": "Open graph view",
+        "settings.tags.label": "Show tags",
+        "settings.tags.description": "Draw each tag as a node, linked to the notes that have it. Click a tag to see only its notes."
+      },
+      "de": {
+        "plugin.description": "Deine Notizen, ihre Schlagwörter und Verknüpfungen als Graph.",
+        "view.label": "Lokaler Graph",
+        "view.showLocal": "Nur Verknüpfungen der offenen Notiz zeigen",
+        "view.showVault": "Ganzen Tresor zeigen",
+        "view.noActiveNote": "Öffne eine Notiz, um zu sehen, mit welchen Notizen sie verknüpft ist.",
+        "settings.graph.title": "Graph",
+        "settings.colorBy.label": "Notizen einfärben nach",
+        "settings.colorBy.description": "Notizen im selben obersten Ordner oder mit demselben ersten Schlagwort haben dieselbe Farbe.",
+        "settings.colorBy.folder": "Ordner",
+        "settings.colorBy.tag": "Schlagwort",
+        "settings.colorBy.none": "Nichts",
+        "settings.orphans.label": "Unverknüpfte Notizen zeigen",
+        "settings.orphans.description": "Auch Notizen zeigen, die auf keine andere Notiz verweisen und auf die keine Notiz verweist.",
+        "settings.depth.label": "Verknüpfungstiefe um die offene Notiz",
+        "settings.depth.description": "Wie viele Verknüpfungen eine Notiz von der offenen Notiz oder einem angeklickten Schlagwort entfernt sein darf, um angezeigt zu werden.",
+        "tab.label": "Graph",
+        "action.openGraph": "Graphansicht öffnen",
+        "command.openGraph": "Graphansicht öffnen",
+        "settings.tags.label": "Schlagwörter zeigen",
+        "settings.tags.description": "Jedes Schlagwort als Knoten zeichnen, verbunden mit den Notizen, die es tragen. Klicke auf ein Schlagwort, um nur seine Notizen zu sehen."
+      }
+    },
+    "settings": [
+      {
+        "sectionId": "graph",
+        "titleKey": "settings.graph.title",
+        "settings": [
+          {
+            "id": "color-by",
+            "labelKey": "settings.colorBy.label",
+            "descriptionKey": "settings.colorBy.description",
+            "scope": "V",
+            "type": "select",
+            "default": "folder",
+            "options": ["folder", "tag", "none"],
+            "optionLabelKeys": {
+              "folder": "settings.colorBy.folder",
+              "tag": "settings.colorBy.tag",
+              "none": "settings.colorBy.none"
+            }
+          },
+          {
+            "id": "orphans",
+            "labelKey": "settings.orphans.label",
+            "descriptionKey": "settings.orphans.description",
+            "scope": "V",
+            "type": "toggle",
+            "default": true
+          },
+          {
+            "id": "tags",
+            "labelKey": "settings.tags.label",
+            "descriptionKey": "settings.tags.description",
+            "scope": "V",
+            "type": "toggle",
+            "default": true
+          },
+          {
+            "id": "depth",
+            "labelKey": "settings.depth.label",
+            "descriptionKey": "settings.depth.description",
+            "scope": "V",
+            "type": "slider",
+            "default": 1,
+            "min": 1,
+            "max": 5,
+            "step": 1
+          }
+        ]
+      }
+    ]
+  }
+}

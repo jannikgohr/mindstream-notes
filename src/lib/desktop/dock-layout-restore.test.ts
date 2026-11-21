@@ -104,6 +104,32 @@ describe('sanitizeDockBlob', () => {
     expect(sanitized.panels['note:a'].title).toBe('Fresh');
   });
 
+  it('keeps a plugin tab view beside notes, with its resolved title', () => {
+    const blob = singleGroupBlob(['a']);
+    blob.grid.root.data[0].data.views.push('view:p:graph', 'view:p:gone');
+    Object.assign(blob.panels, {
+      'view:p:graph': {
+        id: 'view:p:graph',
+        component: 'old',
+        title: 'Saved',
+        params: { pluginId: 'p', viewId: 'graph' }
+      },
+      'view:p:gone': {
+        id: 'view:p:gone',
+        title: 'Gone',
+        params: { pluginId: 'p', viewId: 'gone' }
+      }
+    });
+    const sanitized = sanitizeDockBlob(blob, resolveAll, (_, viewId) =>
+      viewId === 'graph' ? { component: 'pluginTabView', title: null } : null
+    ) as { panels: Record<string, { component: string; title: string }> };
+    expect(Object.keys(sanitized.panels)).toEqual(['note:a', 'view:p:graph']);
+    expect(sanitized.panels['view:p:graph']).toMatchObject({
+      component: 'pluginTabView',
+      title: 'Saved'
+    });
+  });
+
   it('keeps the root a branch after pruning one side of a split', () => {
     // root branch [ leafA, leafB ]; A's note is gone → branch keeps just B
     // as a single child (still a branch, never hoisted to a bare leaf).

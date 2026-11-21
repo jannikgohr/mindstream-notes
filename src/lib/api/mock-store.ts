@@ -12,6 +12,7 @@ import type {
 import type {
   CreateNoteInput,
   Note,
+  NoteLinks,
   NoteKind,
   NoteSummary,
   UpdateNoteInput
@@ -323,6 +324,21 @@ export const mockApi = {
   async listNotes(includeTrashed: boolean): Promise<NoteSummary[]> {
     const arr = [...notes.values()].filter((n) => includeTrashed || !n.trashed);
     return arr.map(summary);
+  },
+  async listNoteLinks(): Promise<NoteLinks[]> {
+    return [...notes.values()]
+      .filter((n) => !n.trashed && n.note_kind === 'markdown')
+      .map((n) => ({
+        id: n.id,
+        modified: n.modified,
+        targets: [
+          ...new Set(
+            [...n.body.matchAll(/\]\(mindstream:\/\/note\/([^\s)]+)\)/g)].map(
+              (m) => decodeURIComponent(m[1])
+            )
+          )
+        ]
+      }));
   },
   async loadNote(id: string): Promise<Note> {
     const n = notes.get(id);

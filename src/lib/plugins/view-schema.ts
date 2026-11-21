@@ -65,6 +65,18 @@ export interface ViewListItem {
   on?: ViewAction;
 }
 
+export interface ViewGraphNode {
+  /**
+   * A note ID, labelled with the note's title. A node with a `label` is
+   * something else the plugin draws, such as a tag, and its ID is the
+   * plugin's own.
+   */
+  id: string;
+  label?: string;
+  /** Nodes in the same group share a colour. */
+  group?: string;
+}
+
 export type ViewNode =
   | { type: 'stack'; children: ViewNode[] }
   | { type: 'heading'; text: ViewText }
@@ -82,7 +94,21 @@ export type ViewNode =
       /** Event sent with the new `YYYY-MM` as `value`. */
       onMonth: string;
     }
-  | { type: 'list'; items: ViewListItem[] };
+  | { type: 'list'; items: ViewListItem[] }
+  | {
+      type: 'graph';
+      /** What may be drawn. The host adds the links between notes. */
+      nodes: ViewGraphNode[];
+      /** Links the plugin draws itself, between IDs in `nodes`. */
+      links: [string, string][];
+      /** Only nodes within `depth` links of this one are drawn. */
+      focus?: string;
+      depth: number;
+      /** Draw notes without links. */
+      orphans: boolean;
+      /** Event sent with the clicked node's ID as `value`. */
+      onSelect: string;
+    };
 
 const MAX_DEPTH = 6;
 const MAX_CHILDREN = 100;
@@ -90,6 +116,9 @@ const MAX_ITEMS = 200;
 const MAX_DAYS = 62;
 const MAX_MARKS = 4;
 const MAX_TEXT = 300;
+const MAX_GRAPH_NODES = 200_000;
+const MAX_GRAPH_LINKS = 1_000_000;
+const MAX_GRAPH_DEPTH = 5;
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
@@ -299,6 +328,43 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
             .filter((item): item is ViewListItem => item !== undefined)
         : [];
       return { type: 'list', items };
+    }
+    case 'graph': {
+      const onSelect = event(value.onSelect);
+      if (!onSelect || !Array.isArray(value.nodes)) return null;
+      const nodes: ViewGraphNode[] = [];
+      for (const raw of value.nodes.slice(0, MAX_GRAPH_NODES)) {
+        if (!isObject(raw)) continue;
+        const id = text(raw.id);
+        if (!id) continue;
+        const node: ViewGraphNode = { id };
+        const label = text(raw.label);
+        const group = text(raw.group);
+        if (label) node.label = label;
+        if (group) node.group = group;
+        nodes.push(node);
+      }
+      const links: [string, string][] = [];
+      if (Array.isArray(value.links)) {
+        for (const raw of value.links.slice(0, MAX_GRAPH_LINKS)) {
+          if (!Array.isArray(raw)) continue;
+          const [a, b] = [text(raw[0]), text(raw[1])];
+          if (a && b) links.push([a, b]);
+        }
+      }
+      const depth =
+        typeof value.depth === 'number' && Number.isInteger(value.depth)
+          ? Math.min(Math.max(value.depth, 1), MAX_GRAPH_DEPTH)
+          : 1;
+      return {
+        type: 'graph',
+        nodes,
+        links,
+        focus: text(value.focus),
+        depth,
+        orphans: value.orphans !== false,
+        onSelect
+      };
     }
     default:
       return null;

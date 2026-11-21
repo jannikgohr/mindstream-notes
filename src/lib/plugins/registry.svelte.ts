@@ -35,6 +35,7 @@ import type {
   PluginSettingsContribution,
   PluginSourceLanguageContribution,
   PluginSidebarViewContribution,
+  PluginTabViewContribution,
   PluginToolbarButton,
   PluginTextCheckerContribution,
   PluginToolbarLocation
@@ -364,6 +365,23 @@ export function pluginSidebarViews(): PluginSidebarViewRef[] {
     pluginId,
     view: entry
   }));
+}
+
+/** A tab view paired with its owning plugin. */
+export interface PluginTabViewRef {
+  pluginId: string;
+  view: PluginTabViewContribution;
+}
+
+/** An enabled plugin's tab view, or `undefined`. */
+export function pluginTabView(
+  pluginId: string,
+  viewId: string
+): PluginTabViewRef | undefined {
+  const view = contributionsOf('tabViews').find(
+    (ref) => ref.pluginId === pluginId && ref.entry.id === viewId
+  );
+  return view && { pluginId, view: view.entry };
 }
 
 /** Drop all registry state. Test-only; keeps suites isolated. */

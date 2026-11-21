@@ -711,6 +711,7 @@ pub fn run() {
                 collections::delete_collection,
                 // Notes
                 notes::list_notes,
+                notes::list_note_links,
                 tree::load_tree,
                 client_errors::report_client_error,
                 notes::load_note,

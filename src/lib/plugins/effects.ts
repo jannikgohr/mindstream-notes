@@ -26,7 +26,8 @@ import type { MenuItem } from '$lib/components/context-menu-types';
 import { buildPluginContext } from './plugin-ctx';
 import { openOrCreateNote } from './open-or-create';
 import { openPluginMenu } from './plugin-menu.svelte';
-import { pluginById, pluginNoteKind } from './registry.svelte';
+import { pluginById, pluginNoteKind, pluginTabView } from './registry.svelte';
+import { openTabView } from './tab-views';
 import type {
   PluginEffect,
   PluginEffectMenuItem,
@@ -142,6 +143,9 @@ export function parsePluginEffect(value: unknown): PluginEffect | null {
       return e.preview === true
         ? { effect: 'openNote', noteId: e.noteId, preview: true }
         : { effect: 'openNote', noteId: e.noteId };
+    case 'openTabView':
+      if (typeof e.viewId !== 'string') return null;
+      return { effect: 'openTabView', viewId: e.viewId };
     case 'openOrCreateNote': {
       if (typeof e.title !== 'string' || e.title.trim() === '') return null;
       const raw = e.template as Record<string, unknown> | null | undefined;
@@ -289,6 +293,13 @@ export async function runPluginEffect(
       requireRead(pluginId);
       if (tree.notesById[effect.noteId])
         requestOpenNote(effect.noteId, { preview: effect.preview });
+      return;
+    case 'openTabView':
+      if (!pluginTabView(pluginId, effect.viewId))
+        throw new Error(
+          `Plugin "${pluginId}" has no tab view "${effect.viewId}"`
+        );
+      openTabView(pluginId, effect.viewId);
       return;
     case 'openOrCreateNote':
       requireCreate(pluginId);

@@ -120,6 +120,8 @@ asymmetric:
   effect it returns, like a toolbar button.
 - **`sidebarViews`** — a view in the desktop sidebar's navigation; see
   "Sidebar views" below.
+- **`tabViews`** — a view that opens as a tab beside notes, drawn the same
+  way; see "Tab views" below.
 - **`artifacts`** — binaries the host downloads and digest-verifies on the
   plugin's behalf, for webview renderers. Requires `pluginArtifacts.download`;
   see "Webview previews" below.
@@ -333,6 +335,7 @@ page:
 | `{ effect: "openMenu", items: [{ label, run: <effect> }] }`   | show a menu; each item runs its nested effect                                     |
 | `{ effect: "openNote", noteId, preview? }`                    | open a note (needs `notes.read`)                                                  |
 | `{ effect: "openOrCreateNote", title, parentId?, template? }` | open the note with that title in that folder, or create it (needs `notes.create`) |
+| `{ effect: "openTabView", viewId }`                           | open, or bring forward, one of the plugin's own `tabViews`                        |
 
 `openOrCreateNote` is decided by the app against its live tree, one creation
 at a time per folder and title, so two quick calls make one note. A plugin's
@@ -630,7 +633,7 @@ With `"type": "schema"` the app calls `render({ ...ctx, state })` and draws the
 `view` it returns from its own components, so the view follows the theme and the
 app's keyboard and screen-reader behaviour. The plugin keeps no memory between
 calls: return `state` and the app hands it back on the next call. It redraws
-when notes, the plugin's settings or the language change.
+when notes, the plugin's settings, the open note or the language change.
 
 | Node                                                                          | Draws                                                                  |
 | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -639,6 +642,7 @@ when notes, the plugin's settings or the language change.
 | `{ type: "button", label, icon?, on }`                                        | a button                                                               |
 | `{ type: "calendar", month, selected?, days, onSelect, onMonth }`             | a month grid; `days` maps `YYYY-MM-DD` to `{ marks, strong?, title? }` |
 | `{ type: "list", items: [{ label, detail?, icon?, noteKind?, tone?, on? }] }` | rows, like the file tree's                                             |
+| `{ type: "graph", nodes, links?, focus?, depth?, orphans?, onSelect }`        | notes as a force-directed graph of their links; see below              |
 
 Text in a node (`text`, `label`, `detail`, a day's `title`) is one of:
 
@@ -654,12 +658,44 @@ Text in a node (`text`, `label`, `detail`, a day's `title`) is one of:
 So a view never chooses a language itself, and adding a translation is a
 manifest change.
 
+A `graph` draws the notes in `nodes` (`[{ id, group? }]`, a note ID and an
+optional colour group) and the links between them, which the host finds in the
+notes' text itself, so the plugin needs only `notes.read`. A node with a
+`label` is the plugin's own, such as a tag, drawn as a ring; `links`
+(`[[id, id], …]`) connects such nodes to notes or to each other. With `focus`,
+only nodes within `depth` links of that one are drawn, and an empty `focus`
+draws nothing; `orphans: false` leaves out nodes without links. Clicking a node
+sends `onSelect` with its ID. The layout runs off the page, so a graph of tens
+of thousands of nodes stays responsive. The Graph plugin is the example.
+
 An `on` is either an effect, performed directly, or `{ event, value? }`, which
 calls `onEvent({ ...ctx, state, event, value })`. That returns
 `{ state?, effect? }`; the app performs the effect and redraws. Calendar
 selection and month changes are events too, with the day or month as `value`,
 and an action-row button sends its `id`. Unknown nodes and fields are dropped,
 and text, list and nesting sizes are capped.
+
+## Tab views (`contributes.tabViews`)
+
+A tab view is drawn like a `schema` sidebar view but opens as a tab in the
+main area, beside notes, like Obsidian's graph view. It has no navigation entry
+of its own: the plugin opens it with the `openTabView` effect, from a command,
+a toolbar button or a sidebar view's action. A view has at most one tab, which
+the app restores with the layout and closes when the plugin is turned off.
+
+```json
+"tabViews": [{
+  "id": "graph",
+  "labelKey": "tab.label",
+  "icon": "icons/graph.svg",
+  "render": { "type": "schema", "render": "renderTab", "onEvent": "onEvent" }
+}]
+```
+
+The tab keeps its own `state`, apart from any sidebar view's. While it is the
+active tab no note is open, so `activeNoteId` is `null`. Tabs are a desktop
+layout: a window without them, such as the mobile app, refuses `openTabView`
+with an error toast.
 
 ## Webview previews (`render.webview`, `contributes.artifacts`)
 
