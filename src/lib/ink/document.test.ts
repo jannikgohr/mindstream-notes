@@ -752,7 +752,7 @@ describe('page strokes read by the Rust host', () => {
   // `ink_pages` in src-tauri/storage-core/src/yrs_doc.rs decodes these notes
   // and must find the same strokes on the same pages. After a deliberate
   // change to how ink is stored, regenerate with UPDATE_INK_FIXTURE=1 and
-  // run `pnpm exec prettier --write` on the fixture.
+  // format the fixture with Prettier.
   const fixturePath =
     'src-tauri/storage-core/src/yrs_doc/ink_pages_fixture.json';
 
@@ -802,7 +802,12 @@ describe('page strokes read by the Rust host', () => {
       legacy.set('tombstoned', false);
       legacy.set('pageId', 'a');
       legacy.set('payload', v1);
-      ink.doc.getArray('strokes').push([legacy]);
+      const replaced = new Y.Map<unknown>();
+      replaced.set('id', 's1');
+      replaced.set('tombstoned', false);
+      replaced.set('pageId', 'b');
+      replaced.set('payload', v1);
+      ink.doc.getArray('strokes').push([legacy, replaced]);
     });
     return ink;
   }
