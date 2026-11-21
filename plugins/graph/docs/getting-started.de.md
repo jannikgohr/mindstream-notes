@@ -10,14 +10,16 @@ Tastenkürzel geben kannst, oder aus der Ansicht **Lokaler Graph** in der
 Seitenleiste.
 
 **Lokaler Graph** in der Seitenleiste zeigt die geöffnete Notiz und die Notizen
-und Schlagwörter in ihrer Nähe und folgt dir, wenn du die Notiz wechselst.
-**Ganzen Tresor zeigen** zeichnet dort stattdessen alles.
+und Schlagwörter in ihrer Nähe und folgt dir, wenn du die Notiz wechselst. Den
+ganzen Tresor gibt es nur im Tab.
 
 - Klicke auf eine Notiz, um sie zu öffnen.
 - Klicke auf ein Schlagwort, um nur die Notizen in seiner Nähe zu sehen.
-  **Ganzen Tresor zeigen** kehrt zurück.
-- Ziehe eine Notiz, um sie zu verschieben, ziehe den Hintergrund, um die
-  Ansicht zu verschieben, und scrolle zum Zoomen. Namen erscheinen beim
+  **Ganzen Tresor zeigen** im Tab oder **Zurück zur offenen Notiz** in der
+  Seitenleiste kehrt zurück.
+- Ziehe eine Notiz, um sie zu verschieben, und scrolle zum Zoomen. Um die
+  Ansicht zu verschieben, ziehe den Hintergrund oder ziehe irgendwo mit der
+  mittleren oder rechten Maustaste. Namen erscheinen beim
   Hineinzoomen, die größten Notizen zuerst.
 - Zeige auf eine Notiz, um hervorzuheben, womit sie verknüpft ist.
 

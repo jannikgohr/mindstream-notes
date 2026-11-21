@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
    * The `graph` node of a schema view: notes as a force-directed graph of
-   * their links, on a canvas. Drag a note to move it, drag the background to
-   * pan, scroll to zoom, click a note to send `onSelect`. The layout runs in
+   * their links, on a canvas. Drag a note to move it, drag the background (or
+   * anywhere with the middle or right button) to pan, scroll to zoom, click
+   * a note to send `onSelect`. The layout runs in
    * a worker (see graph-layout.worker.ts); this side only draws: links and
    * nodes with WebGL (see graph-renderer.ts), labels on a 2D canvas above.
    * Without WebGL the 2D canvas draws everything.
@@ -555,11 +556,12 @@
   }
 
   function onPointerDown(event: PointerEvent) {
-    if (event.button !== 0) return;
+    if (drag || event.button > 2) return;
+    // The middle and right buttons move the view wherever they go down.
     const { sx, sy } = local(event);
     canvas!.setPointerCapture(event.pointerId);
     drag = {
-      target: nodeAt(sx, sy),
+      target: event.button === 0 ? nodeAt(sx, sy) : -1,
       startX: sx,
       startY: sy,
       moved: false,
@@ -662,6 +664,11 @@
     onpointerup={onPointerUp}
     onpointercancel={onPointerUp}
     onpointerleave={onPointerLeave}
+    onmousedown={(event) => {
+      // Or the middle button starts the browser's own scrolling.
+      if (event.button === 1) event.preventDefault();
+    }}
+    oncontextmenu={(event) => event.preventDefault()}
   ></canvas>
   {#if empty}
     <p

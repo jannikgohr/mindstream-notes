@@ -61,7 +61,7 @@
       "en": {
         "plugin.description": "Your notes, their tags and the links between them, as a graph.",
         "view.label": "Local graph",
-        "view.showLocal": "Show only the open note's links",
+        "view.showLocal": "Back to the open note",
         "view.showVault": "Show the whole vault",
         "view.noActiveNote": "Open a note to see the notes it's linked with.",
         "settings.graph.title": "Graph",
@@ -83,7 +83,7 @@
       "de": {
         "plugin.description": "Deine Notizen, ihre Schlagwörter und Verknüpfungen als Graph.",
         "view.label": "Lokaler Graph",
-        "view.showLocal": "Nur Verknüpfungen der offenen Notiz zeigen",
+        "view.showLocal": "Zurück zur offenen Notiz",
         "view.showVault": "Ganzen Tresor zeigen",
         "view.noActiveNote": "Öffne eine Notiz, um zu sehen, mit welchen Notizen sie verknüpft ist.",
         "settings.graph.title": "Graph",
