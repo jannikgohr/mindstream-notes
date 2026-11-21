@@ -17,6 +17,7 @@ sha2 = "0.10"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 yrs = "0.26"
+mindstream-ink = { path = "../ink" }
 similar = "3"
 regex = "1"
 yaml-rust2 = "0.12"

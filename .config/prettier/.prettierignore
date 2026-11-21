@@ -12,6 +12,8 @@ package-lock.json
 
 # Rust
 src-tauri/target/
+# Written by a test in src/lib/ink/document.test.ts
+src-tauri/storage-core/src/yrs_doc/ink_pages_fixture.json
 src-tauri/Cargo.lock
 **/target/
 crates/**/Cargo.lock
