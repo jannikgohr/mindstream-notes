@@ -64,26 +64,35 @@ function folderPath(folderId: string | null): string {
 /** The `notes.*` snapshot `note_snapshot` takes in the backend, from `active_notes`. */
 function browserNotes(pluginId: string): HostNote[] {
   if (!granted(pluginId, 'notes.read')) return [];
-  return Object.values(tree.notesById)
-    .filter(
-      (note) =>
-        !note.trashed &&
-        !ancestorIsTrash(
-          note.parent_collection_id,
-          tree.collectionsById,
-          TRASH_ID
-        )
-    )
-    .map((note) => ({
+  // Worked out once per folder: a vault has far fewer folders than notes.
+  const folders = new Map<string | null, { path: string; trashed: boolean }>();
+  const folderOf = (id: string | null) => {
+    let folder = folders.get(id);
+    if (!folder) {
+      folder = {
+        path: folderPath(id),
+        trashed: ancestorIsTrash(id, tree.collectionsById, TRASH_ID)
+      };
+      folders.set(id, folder);
+    }
+    return folder;
+  };
+  const notes: HostNote[] = [];
+  for (const note of Object.values(tree.notesById)) {
+    const folder = folderOf(note.parent_collection_id);
+    if (note.trashed || folder.trashed) continue;
+    notes.push({
       id: note.id,
       title: note.title,
       tags: [...note.tags],
       kind: note.note_kind,
       folderId: note.parent_collection_id ?? undefined,
-      folderPath: folderPath(note.parent_collection_id),
+      folderPath: folder.path,
       created: note.created,
       modified: note.modified
-    }));
+    });
+  }
+  return notes;
 }
 
 export async function runPluginScript(

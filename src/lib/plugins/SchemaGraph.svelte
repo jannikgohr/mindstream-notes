@@ -14,7 +14,7 @@
    * Without WebGL the 2D canvas draws everything.
    */
   import { untrack } from 'svelte';
-  import { Settings2 } from '@lucide/svelte';
+  import { Play, Settings2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import { loadNoteLinks } from '$lib/notes/note-relations';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -34,7 +34,7 @@
     type GraphRenderer
   } from './graph-renderer';
   import PluginSettingsPanel from './PluginSettingsPanel.svelte';
-  import { adjacency, visibleGraph } from './schema-graph';
+  import { indexGraph, type GraphIndex } from './schema-graph';
   import { pluginSettingsSectionsFor } from './settings-bridge';
   import type { ViewNode } from './view-schema';
 
@@ -82,6 +82,10 @@
   const HOLD_MS = 350;
   // Phones report three and more; past two the extra pixels only cost.
   const MAX_PIXEL_RATIO = 2;
+  // A new graph of the whole vault grows into place, oldest note first.
+  const growMs = (nodes: number) => Math.min(Math.max(nodes * 40, 800), 6000);
+  const stillLife =
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
   // Labels drawn at once, biggest nodes first, beyond the hovered note's.
   const MAX_LABELS = 250;
   // Below this many pixels across, a node is drawn as a square: much cheaper
@@ -118,7 +122,16 @@
   let byRadius = new Uint32Array(0);
   // Indexes by how they're drawn: colour, then disc or ring.
   let buckets: { colour: number; ring: boolean; nodes: Uint32Array }[] = [];
-  let neighbours = adjacency([]);
+  // Node i is linked to adjacent[offset[i]] up to offset[i + 1], and
+  // linksAmong[k] of `pairs` lie among the first k nodes.
+  let offset = new Uint32Array(1);
+  let adjacent = new Uint32Array(0);
+  let linksAmong = new Uint32Array(1);
+  // How many nodes, from the first, a growing layout has let in so far.
+  let active = 0;
+  // Which nodes are linked to the hovered one.
+  let litNode = new Uint8Array(0);
+  let forces = DEFAULT_FORCES;
   let version = 0;
   let hovered = -1;
   let related = new Uint8Array(0);
@@ -158,7 +171,6 @@
   function nodeStyles(): Uint8Array {
     const focus =
       node.focus === undefined ? -1 : (indexOf.get(node.focus) ?? -1);
-    const lit = hovered >= 0 ? neighbours.get(ids[hovered]) : undefined;
     const styles = new Uint8Array(ids.length * 2);
     for (let i = 0; i < ids.length; i++) {
       styles[2 * i] = related[i]
@@ -168,7 +180,7 @@
           : colour[i];
       styles[2 * i + 1] =
         (other[i] ? NODE_RING : 0) |
-        (lit?.has(ids[i]) ? NODE_LIT : 0) |
+        (litNode[i] ? NODE_LIT : 0) |
         (i === focus || i === hovered ? NODE_ACCENT : 0);
     }
     return styles;
@@ -183,8 +195,9 @@
       const i = indexOf.get(target);
       if (i !== undefined && i !== centre) relation[i] |= 1;
     }
-    for (const near of neighbours.get(id) ?? []) {
-      if (outgoing.get(near)?.includes(id)) relation[indexOf.get(near)!] |= 2;
+    for (let e = offset[centre]; e < offset[centre + 1]; e++) {
+      const near = adjacent[e];
+      if (outgoing.get(ids[near])?.includes(id)) relation[near] |= 2;
     }
     return relation;
   }
@@ -196,11 +209,12 @@
     related = relationsTo(hovered >= 0 ? hovered : focus);
     legend = related.some((relation) => relation > 0);
     litLinks = [[], [], [], []];
+    litNode = new Uint8Array(ids.length);
     if (hovered >= 0) {
-      for (let p = 0; p < pairs.length; p += 2) {
-        const [a, b] = [pairs[p], pairs[p + 1]];
-        if (a === hovered || b === hovered)
-          litLinks[related[a === hovered ? b : a]].push(a, b);
+      for (let e = offset[hovered]; e < offset[hovered + 1]; e++) {
+        const near = adjacent[e];
+        litNode[near] = 1;
+        if (near < active) litLinks[related[near]].push(hovered, near);
       }
     }
     if (!renderer || sceneStale) return;
@@ -218,6 +232,7 @@
 
   function onPositions(positions: LayoutPositions) {
     if (positions.version !== version) return;
+    active = positions.active;
     xs = positions.x;
     ys = positions.y;
     if (renderer) {
@@ -249,25 +264,24 @@
   });
 
   $effect(() => {
-    const graph = visibleGraph(node, outgoing);
-    const titles = tree.notesById;
-    untrack(() => relayout(graph, titles));
+    const [given, links, titles] = [node, outgoing, tree.notesById];
+    // Laying out before the links are in would only be thrown away.
+    if (!linksLoaded) return;
+    untrack(() =>
+      relayout(
+        indexGraph(given, links, (id) => Date.parse(titles[id]?.created ?? '')),
+        titles
+      )
+    );
   });
 
-  function relayout(
-    graph: ReturnType<typeof visibleGraph>,
-    titles: typeof tree.notesById
-  ) {
+  function relayout(graph: GraphIndex, titles: typeof tree.notesById) {
     const previous = indexOf;
     const [oldX, oldY] = [xs, ys];
     const n = graph.nodes.length;
     const nextIds = graph.nodes.map((g) => g.id);
     const nextIndex = new Map(nextIds.map((id, i) => [id, i]));
-    const nextPairs = new Uint32Array(graph.links.length * 2);
-    graph.links.forEach(([a, b], i) => {
-      nextPairs[2 * i] = nextIndex.get(a)!;
-      nextPairs[2 * i + 1] = nextIndex.get(b)!;
-    });
+    const nextPairs = graph.pairs;
     labels = graph.nodes.map((g) => g.label ?? titles[g.id]?.title ?? '');
     // Most redraws come from an edit that changed no link: keep the layout.
     const same =
@@ -275,7 +289,7 @@
       nextIds.every((id, i) => id === ids[i]) &&
       nextPairs.length === pairs.length &&
       nextPairs.every((v, i) => v === pairs[i]);
-    const forces = {
+    forces = {
       centre: node.forces?.centre ?? DEFAULT_FORCES.centre,
       repel: node.forces?.repel ?? DEFAULT_FORCES.repel,
       link: node.forces?.link ?? DEFAULT_FORCES.link,
@@ -288,7 +302,7 @@
       schedule();
       return;
     }
-    neighbours = adjacency(graph.links);
+    ({ offset, adjacent, linksAmong } = graph);
 
     ids = nextIds;
     indexOf = nextIndex;
@@ -300,7 +314,7 @@
     );
     radius = Float32Array.from(
       ids,
-      (id) => 3 + Math.min(Math.sqrt(neighbours.get(id)?.size ?? 0) * 1.5, 9)
+      (_, i) => 3 + Math.min(Math.sqrt(offset[i + 1] - offset[i]) * 1.5, 9)
     );
     xs = new Float32Array(n).fill(NaN);
     ys = new Float32Array(n).fill(NaN);
@@ -314,8 +328,8 @@
         return;
       }
       // A node new to the view starts beside a node it links to.
-      for (const near of neighbours.get(id) ?? []) {
-        const j = previous.get(near);
+      for (let e = offset[i]; e < offset[i + 1]; e++) {
+        const j = previous.get(ids[adjacent[e]]);
         if (j === undefined || Number.isNaN(oldX[j])) continue;
         xs[i] = oldX[j] + (Math.random() - 0.5) * 20;
         ys[i] = oldY[j] + (Math.random() - 0.5) * 20;
@@ -337,13 +351,17 @@
     );
     hovered = -1;
     related = new Uint8Array(n);
+    litNode = new Uint8Array(n);
     picked = null;
     sceneStale = true;
     empty = n === 0;
     shownNodes = n;
-    shownLinks = graph.links.length;
+    shownLinks = graph.pairs.length / 2;
     if (kept === 0 || node.focus !== fittedFocus) autoFit = true;
 
+    const grows = kept === 0 && node.focus === undefined && !stillLife;
+    if (grows) return replay();
+    active = n;
     version++;
     layout.send({
       type: 'layout',
@@ -359,11 +377,36 @@
     schedule();
   }
 
+  /** Lay the graph out from nothing, a node at a time. */
+  function replay() {
+    const n = ids.length;
+    xs = new Float32Array(n).fill(NaN);
+    ys = new Float32Array(n).fill(NaN);
+    active = 0;
+    autoFit = true;
+    picked = null;
+    hover(-1);
+    version++;
+    layout.send({
+      type: 'layout',
+      version,
+      radius: radius.slice(),
+      x: xs.slice(),
+      y: ys.slice(),
+      links: pairs.slice(),
+      alpha: 1,
+      warmup: false,
+      forces,
+      grow: growMs(n)
+    });
+    schedule();
+  }
+
   /** Zoom and centre on every node, at most to twice the natural size. */
   function fit() {
     if (!autoFit || !width || !height || !ids.length) return;
     let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < ids.length; i++) {
+    for (let i = 0; i < active; i++) {
       if (Number.isNaN(xs[i])) continue;
       minX = Math.min(minX, xs[i]);
       minY = Math.min(minY, ys[i]);
@@ -431,7 +474,7 @@
     const { x, y } = toWorld(sx, sy);
     let best = -1;
     let bestGap = Infinity;
-    for (let i = ids.length - 1; i >= 0; i--) {
+    for (let i = active - 1; i >= 0; i--) {
       const gap = Math.hypot(xs[i] - x, ys[i] - y) - radius[i];
       if (gap <= 0) return i;
       if (gap < bestGap) [best, bestGap] = [i, gap];
@@ -485,6 +528,8 @@
         x: camera.x,
         y: camera.y,
         k,
+        nodes: active,
+        linkEnds: 2 * linksAmong[active],
         palette,
         link: rgba(token('--border-strong'), linkAlpha),
         litLinks: litLinks.map((run, relation) => ({
@@ -514,12 +559,13 @@
     const right = toWorld(width, height).x + margin;
     const bottom = toWorld(width, height).y + margin;
     const outside = (i: number) =>
+      i >= active ||
       !(xs[i] >= left && xs[i] <= right && ys[i] >= top && ys[i] <= bottom);
 
     const focus =
       node.focus === undefined ? -1 : (indexOf.get(node.focus) ?? -1);
-    const lit = hovered >= 0 ? neighbours.get(ids[hovered]) : undefined;
-    const isLit = (i: number) => i === hovered || (lit?.has(ids[i]) ?? false);
+    const lit = hovered >= 0;
+    const isLit = (i: number) => i === hovered || litNode[i] === 1;
 
     if (!renderer) {
       // Links, in one path: one stroke for all of them is what keeps a big
@@ -528,7 +574,7 @@
       ctx.strokeStyle = token('--border-strong');
       ctx.globalAlpha = linkAlpha;
       ctx.beginPath();
-      for (let p = 0; p < pairs.length; p += 2) {
+      for (let p = 0; p < 2 * linksAmong[active]; p += 2) {
         const a = pairs[p];
         const b = pairs[p + 1];
         if (Number.isNaN(xs[a]) || Number.isNaN(xs[b])) continue;
@@ -600,7 +646,7 @@
         pass(false, 1);
       }
       related.forEach((relation, i) => {
-        if (!relation || Number.isNaN(xs[i])) return;
+        if (!relation || Number.isNaN(xs[i]) || i >= active) return;
         ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(xs[i], ys[i], radius[i], 0, Math.PI * 2);
@@ -608,7 +654,7 @@
         ctx.fill();
       });
       for (const i of [focus, hovered]) {
-        if (i < 0 || Number.isNaN(xs[i])) continue;
+        if (i < 0 || i >= active || Number.isNaN(xs[i])) continue;
         ctx.globalAlpha = 1;
         ctx.beginPath();
         ctx.arc(xs[i], ys[i], radius[i], 0, Math.PI * 2);
@@ -646,7 +692,8 @@
     if (focus >= 0) label(focus, 1);
     if (hovered >= 0) {
       label(hovered, 1);
-      for (const id of lit ?? []) label(indexOf.get(id)!, 1);
+      for (let e = offset[hovered]; e < offset[hovered + 1]; e++)
+        label(adjacent[e], 1);
     }
     ctx.globalAlpha = 1;
   }
@@ -866,6 +913,20 @@
         </li>
       {/each}
     </ul>
+  {/if}
+  {#if !empty}
+    <Button
+      variant="ghost"
+      size="icon"
+      class="absolute top-1 size-8 text-muted-foreground {hasSettings
+        ? 'right-9'
+        : 'right-1'}"
+      title={tUi('graph.replay')}
+      aria-label={tUi('graph.replay')}
+      onclick={replay}
+    >
+      <Play class="size-4" />
+    </Button>
   {/if}
   {#if hasSettings}
     <Button

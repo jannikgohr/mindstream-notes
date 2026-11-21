@@ -22,6 +22,9 @@ ganzen Tresor gibt es nur im Tab.
   mittleren oder rechten Maustaste. Namen erscheinen beim
   Hineinzoomen, die größten Notizen zuerst.
 - Zeige auf eine Notiz, um hervorzuheben, womit sie verknüpft ist.
+- Der ganze Tresor wächst beim Öffnen an seinen Platz, die älteste Notiz
+  zuerst. Der Abspielknopf oben rechts zeigt das noch einmal, in beiden
+  Graphen.
 
 Auf dem Handy öffnet der Graph-Knopf über deinen Notizen den ganzen Tresor.
 Tippe auf eine Notiz, um hervorzuheben, womit sie verknüpft ist, und dann auf

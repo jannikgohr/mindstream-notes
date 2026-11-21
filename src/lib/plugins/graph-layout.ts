@@ -30,12 +30,19 @@ export type LayoutRequest =
       /** Settle before sending the first positions. */
       warmup: boolean;
       forces: LayoutForces;
+      /**
+       * Let the graph grow over this many milliseconds, a node at a time in
+       * index order. `links` are then ordered by the higher of their ends.
+       */
+      grow?: number;
     }
   | { type: 'drag'; version: number; index: number; x: number; y: number }
   | { type: 'release'; version: number; index: number };
 
 export interface LayoutPositions {
   version: number;
+  /** How many nodes, from the first, are in the layout yet. */
+  active: number;
   x: Float32Array<ArrayBuffer>;
   y: Float32Array<ArrayBuffer>;
 }

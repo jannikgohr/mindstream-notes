@@ -61,6 +61,9 @@ export interface GraphFrame {
   x: number;
   y: number;
   k: number;
+  /** Draw only the first this many nodes and link ends: a growing graph. */
+  nodes: number;
+  linkEnds: number;
   /** PALETTE_SIZE colours, four floats each; the last is the accent. */
   palette: Float32Array;
   link: Rgba;
@@ -296,7 +299,12 @@ export function createGraphRenderer(
       if (linkCount) {
         gl.uniform4fv(linkUniforms.colour, frame.link);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, linkIndex);
-        gl.drawElements(gl.LINES, linkCount, gl.UNSIGNED_INT, 0);
+        gl.drawElements(
+          gl.LINES,
+          Math.min(linkCount, frame.linkEnds),
+          gl.UNSIGNED_INT,
+          0
+        );
       }
       if (litCount) {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, litIndex);
@@ -318,7 +326,12 @@ export function createGraphRenderer(
       gl.bindVertexArray(nodeArray);
       for (const pass of frame.dimOthers ? [1, 2] : [0]) {
         gl.uniform1i(nodeUniforms.pass, pass);
-        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nodes);
+        gl.drawArraysInstanced(
+          gl.TRIANGLE_STRIP,
+          0,
+          4,
+          Math.min(nodes, frame.nodes)
+        );
       }
       gl.bindVertexArray(null);
     },
