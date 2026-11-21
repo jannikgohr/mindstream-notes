@@ -54,6 +54,7 @@
   import type { FabAction, FabSection } from './MobileFab.svelte';
   import MobileBottomNav from './MobileBottomNav.svelte';
   import MobileEditor from './MobileEditor.svelte';
+  import MobileTabView from './MobileTabView.svelte';
   import LazyMobileSettingsDialog from './LazyMobileSettingsDialog.svelte';
   import NameInputSheet from './NameInputSheet.svelte';
   import {
@@ -72,8 +73,10 @@
     installMobileHistoryNav,
     migrateLegacyFavourites,
     mobileState,
-    navigateToEditor
+    navigateToEditor,
+    navigateToTabView
   } from './state.svelte';
+  import { onOpenTabView } from '$lib/plugins/tab-views';
 
   $effect(() => {
     void nativeDeviceUi.revision;
@@ -106,9 +109,11 @@
     // different note. Mobile's "open" is just a screen switch + active
     // note swap; the editor's $effect tears down and re-mounts.
     const unsubIntent = subscribeOpenNoteRequest((id) => openNote(id));
+    const unsubTabViews = onOpenTabView(navigateToTabView);
     return () => {
       unsubHistory();
       unsubIntent();
+      unsubTabViews();
     };
   });
 
@@ -376,6 +381,10 @@
 
     <div class="safe-bottom shrink-0 bg-surface-0">
       <MobileBottomNav />
+    </div>
+  {:else if mobileState.screen === 'view' && mobileState.tabView}
+    <div class="safe-top safe-bottom flex h-full w-full flex-col">
+      <MobileTabView {...mobileState.tabView} />
     </div>
   {:else}
     <div class="safe-top safe-bottom flex h-full w-full flex-col">

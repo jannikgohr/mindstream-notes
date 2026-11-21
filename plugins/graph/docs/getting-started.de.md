@@ -23,6 +23,13 @@ ganzen Tresor gibt es nur im Tab.
   Hineinzoomen, die größten Notizen zuerst.
 - Zeige auf eine Notiz, um hervorzuheben, womit sie verknüpft ist.
 
+Auf dem Handy öffnet der Graph-Knopf über deinen Notizen den ganzen Tresor.
+Tippe auf eine Notiz, um hervorzuheben, womit sie verknüpft ist, und dann auf
+**Öffnen**, um sie zu öffnen. Ziehe mit einem Finger, um die Ansicht zu
+verschieben, und zoome mit zwei Fingern. Um eine Notiz zu verschieben, lass den
+Finger einen Moment auf ihr ruhen, bevor du ziehst. Den lokalen Graphen gibt es
+auf dem Handy noch nicht.
+
 Eine Verknüpfung ist ein Link auf eine andere Notiz im Text einer Notiz, etwa
 einer, der mit `[[` angelegt wurde. Links aus Notizen, die keine
 Markdown-Notizen sind, werden nicht gezeigt.

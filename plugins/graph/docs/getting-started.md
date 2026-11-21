@@ -17,6 +17,11 @@ it, and follows you as you switch notes. The whole vault is only in the tab.
   background, or drag anywhere with the middle or right mouse button. Names appear as you zoom in, the biggest notes first.
 - Point at a note to highlight what it's linked with.
 
+On a phone, the graph button above your notes opens the whole vault. Tap a note
+to highlight what it's linked with, then **Open** to open it. Drag with one
+finger to move the view and pinch to zoom. To move a note, rest your finger on
+it for a moment before dragging. The local graph is not on phones yet.
+
 A link is a link to another note in the note's text, such as one made with
 `[[`. Links from notes other than Markdown notes aren't shown.
 

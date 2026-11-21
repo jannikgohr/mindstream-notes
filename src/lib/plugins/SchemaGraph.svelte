@@ -3,12 +3,18 @@
    * The `graph` node of a schema view: notes as a force-directed graph of
    * their links, on a canvas. Drag a note to move it, drag the background (or
    * anywhere with the middle or right button) to pan, scroll to zoom, click
-   * a note to send `onSelect`. The layout runs in
-   * a worker (see graph-layout.worker.ts); this side only draws: links and
+   * a note to send `onSelect`.
+   *
+   * A finger has no hover, so a tap picks a note, which lights its links as
+   * hover does and offers to open it. One finger pans, two zoom, and a note
+   * moves once the finger has rested on it.
+   *
+   * The layout runs in a worker (see graph-layout.worker.ts); this side only draws: links and
    * nodes with WebGL (see graph-renderer.ts), labels on a 2D canvas above.
    * Without WebGL the 2D canvas draws everything.
    */
   import { untrack } from 'svelte';
+  import { Button } from '$lib/components/ui/button';
   import { loadNoteLinks } from '$lib/notes/note-relations';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { tree } from '$lib/stores/tree.svelte';
@@ -47,6 +53,12 @@
   ];
   const MUTED = -1;
   const DRAG_THRESHOLD = 4;
+  // How far around a note a finger still hits it, and how long it must rest
+  // on the note before a drag moves the note rather than the view.
+  const TOUCH_SLOP = 16;
+  const HOLD_MS = 350;
+  // Phones report three and more; past two the extra pixels only cost.
+  const MAX_PIXEL_RATIO = 2;
   // Labels drawn at once, biggest nodes first, beyond the hovered note's.
   const MAX_LABELS = 250;
   // Below this many pixels across, a node is drawn as a square: much cheaper
@@ -66,6 +78,8 @@
   let empty = $state(false);
   let shownNodes = $state(0);
   let shownLinks = $state(0);
+  // The note a tap picked, as the bar at the bottom shows it.
+  let picked = $state<{ id: string; label: string } | null>(null);
 
   // The drawn layout, by node index.
   let ids: string[] = [];
@@ -260,6 +274,7 @@
       (a, b) => radius[b] - radius[a]
     );
     hovered = -1;
+    picked = null;
     sceneStale = true;
     empty = n === 0;
     shownNodes = n;
@@ -309,7 +324,7 @@
 
   $effect(() => {
     if (!canvas) return;
-    const ratio = window.devicePixelRatio || 1;
+    const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     if (glCanvas) {
@@ -347,13 +362,36 @@
     };
   }
 
-  function nodeAt(sx: number, sy: number): number {
+  /** The node at a point, or the nearest within `slop` screen pixels. */
+  function nodeAt(sx: number, sy: number, slop = 4): number {
     const { x, y } = toWorld(sx, sy);
+    let best = -1;
+    let bestGap = Infinity;
     for (let i = ids.length - 1; i >= 0; i--) {
-      const hit = radius[i] + 4 / camera.k;
-      if ((xs[i] - x) ** 2 + (ys[i] - y) ** 2 <= hit * hit) return i;
+      const gap = Math.hypot(xs[i] - x, ys[i] - y) - radius[i];
+      if (gap <= 0) return i;
+      if (gap < bestGap) [best, bestGap] = [i, gap];
     }
-    return -1;
+    return bestGap <= slop / camera.k ? best : -1;
+  }
+
+  function hover(next: number) {
+    if (next === hovered) return;
+    hovered = next;
+    showHover();
+    schedule();
+  }
+
+  function pick(index: number) {
+    hover(index);
+    picked = index < 0 ? null : { id: ids[index], label: labels[index] };
+  }
+
+  function openPicked() {
+    if (!picked) return;
+    const { id } = picked;
+    pick(-1);
+    onEvent(node.onSelect, id);
   }
 
   function draw() {
@@ -538,8 +576,41 @@
     ctx.globalAlpha = 1;
   }
 
+  // Fingers on the canvas, and the two-finger gesture's last reading.
+  let touches: { id: number; sx: number; sy: number }[] = [];
+  let pinch: { gap: number; sx: number; sy: number } | undefined;
+
+  function pinchReading() {
+    const [a, b] = touches;
+    return {
+      gap: Math.max(Math.hypot(a.sx - b.sx, a.sy - b.sy), 1),
+      sx: (a.sx + b.sx) / 2,
+      sy: (a.sy + b.sy) / 2
+    };
+  }
+
+  function zoomAt(sx: number, sy: number, k: number) {
+    const before = toWorld(sx, sy);
+    camera.k = Math.min(Math.max(k, 0.02), 8);
+    camera.x = sx - width / 2 - before.x * camera.k;
+    camera.y = sy - height / 2 - before.y * camera.k;
+  }
+
+  function endDrag() {
+    if (!drag) return;
+    if (drag.target >= 0)
+      layout.send({
+        type: 'release',
+        version: drag.version,
+        index: drag.target
+      });
+    drag = undefined;
+  }
+
   let drag:
     | {
+        touch: boolean;
+        at: number;
         target: number;
         startX: number;
         startY: number;
@@ -556,12 +627,28 @@
   }
 
   function onPointerDown(event: PointerEvent) {
+    const { sx, sy } = local(event);
+    const touch = event.pointerType === 'touch';
+    if (touch) {
+      touches.push({ id: event.pointerId, sx, sy });
+      canvas!.setPointerCapture(event.pointerId);
+      if (touches.length === 2) {
+        endDrag();
+        pinch = pinchReading();
+        autoFit = false;
+      }
+      if (touches.length > 1) return;
+    }
     if (drag || event.button > 2) return;
     // The middle and right buttons move the view wherever they go down.
-    const { sx, sy } = local(event);
     canvas!.setPointerCapture(event.pointerId);
     drag = {
-      target: event.button === 0 ? nodeAt(sx, sy) : -1,
+      touch,
+      at: performance.now(),
+      target:
+        event.button === 0
+          ? nodeAt(sx, sy, touch ? TOUCH_SLOP : undefined)
+          : -1,
       startX: sx,
       startY: sy,
       moved: false,
@@ -573,19 +660,35 @@
 
   function onPointerMove(event: PointerEvent) {
     const { sx, sy } = local(event);
+    const finger = touches.find((touch) => touch.id === event.pointerId);
+    if (finger) Object.assign(finger, { sx, sy });
+    if (pinch && touches.length === 2) {
+      const next = pinchReading();
+      camera.x += next.sx - pinch.sx;
+      camera.y += next.sy - pinch.sy;
+      zoomAt(next.sx, next.sy, (camera.k * next.gap) / pinch.gap);
+      pinch = next;
+      schedule();
+      return;
+    }
     if (!drag) {
+      if (event.pointerType === 'touch') return;
       const next = nodeAt(sx, sy);
-      if (next !== hovered) {
-        hovered = next;
-        showHover();
-        canvas!.style.cursor = next >= 0 ? 'pointer' : 'grab';
-        schedule();
-      }
+      canvas!.style.cursor = next >= 0 ? 'pointer' : 'grab';
+      hover(next);
       return;
     }
     const dx = sx - drag.startX;
     const dy = sy - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    // A finger that moves off at once is moving the view, not the note.
+    if (
+      !drag.moved &&
+      drag.touch &&
+      drag.target >= 0 &&
+      performance.now() - drag.at < HOLD_MS
+    )
+      drag.target = -1;
     drag.moved = true;
     autoFit = false;
     if (drag.target < 0) {
@@ -606,38 +709,40 @@
   }
 
   function onPointerUp(event: PointerEvent) {
+    // A finger left over from a pinch carries nothing on: the view would
+    // jump to it.
+    const fingers = touches.length;
+    touches = touches.filter((touch) => touch.id !== event.pointerId);
+    if (touches.length < fingers && pinch) {
+      if (touches.length === 0) pinch = undefined;
+      return;
+    }
     if (!drag) return;
-    const { target, moved } = drag;
+    const { target, moved, touch } = drag;
+    const current = drag.version === version;
     canvas!.releasePointerCapture(event.pointerId);
     canvas!.style.cursor = hovered >= 0 ? 'pointer' : 'grab';
-    if (target >= 0) {
-      layout.send({ type: 'release', version: drag.version, index: target });
-      if (!moved && drag.version === version)
-        onEvent(node.onSelect, ids[target]);
-    }
-    drag = undefined;
+    endDrag();
+    if (moved || !current || event.type === 'pointercancel') return;
+    if (touch) pick(target);
+    else if (target >= 0) onEvent(node.onSelect, ids[target]);
   }
 
-  function onPointerLeave() {
-    if (drag || hovered < 0) return;
-    hovered = -1;
-    showHover();
-    schedule();
+  function onPointerLeave(event: PointerEvent) {
+    // A lifted finger leaves too, and what it picked stays picked.
+    if (drag || event.pointerType === 'touch') return;
+    hover(-1);
   }
 
   function onWheel(event: WheelEvent) {
     event.preventDefault();
     const { sx, sy } = local(event);
-    const before = toWorld(sx, sy);
     // A mouse set to scroll by lines reports lines, and a trackpad pinch
     // arrives as a ctrl+wheel with small deltas.
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : 1);
     const rate = event.ctrlKey ? 0.01 : 0.002;
-    const k = Math.min(Math.max(camera.k * Math.exp(-delta * rate), 0.02), 8);
     autoFit = false;
-    camera.k = k;
-    camera.x = sx - width / 2 - before.x * k;
-    camera.y = sy - height / 2 - before.y * k;
+    zoomAt(sx, sy, camera.k * Math.exp(-delta * rate));
     schedule();
   }
 </script>
@@ -670,6 +775,14 @@
     }}
     oncontextmenu={(event) => event.preventDefault()}
   ></canvas>
+  {#if picked}
+    <div
+      class="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-lg border border-border bg-surface-1 py-1.5 pl-3 pr-1.5 shadow-overlay"
+    >
+      <span class="min-w-0 flex-1 truncate text-sm">{picked.label}</span>
+      <Button size="sm" onclick={openPicked}>{tUi('graph.open')}</Button>
+    </div>
+  {/if}
   {#if empty}
     <p
       class="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-muted-foreground"

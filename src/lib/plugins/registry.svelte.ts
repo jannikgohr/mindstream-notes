@@ -373,15 +373,22 @@ export interface PluginTabViewRef {
   view: PluginTabViewContribution;
 }
 
+/** Tab views contributed by all enabled plugins, in registration order. */
+export function pluginTabViews(): PluginTabViewRef[] {
+  return contributionsOf('tabViews').map(({ pluginId, entry }) => ({
+    pluginId,
+    view: entry
+  }));
+}
+
 /** An enabled plugin's tab view, or `undefined`. */
 export function pluginTabView(
   pluginId: string,
   viewId: string
 ): PluginTabViewRef | undefined {
-  const view = contributionsOf('tabViews').find(
-    (ref) => ref.pluginId === pluginId && ref.entry.id === viewId
+  return pluginTabViews().find(
+    (ref) => ref.pluginId === pluginId && ref.view.id === viewId
   );
-  return view && { pluginId, view: view.entry };
 }
 
 /** Drop all registry state. Test-only; keeps suites isolated. */
