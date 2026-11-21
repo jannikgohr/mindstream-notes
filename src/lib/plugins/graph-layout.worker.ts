@@ -11,14 +11,19 @@
 import { createForceLayout, type ForceLayout } from './graph-force';
 import type { LayoutRequest, LayoutPositions } from './graph-layout';
 
-// Past this many nodes collisions cost more than they show, and the layout
-// cools in about 90 ticks rather than 300: each tick is slow there, and
-// every one redraws the whole graph. Repulsion also reaches the whole graph,
-// or the pull to the centre packs it into a heap of overlapping nodes.
+// Past this many nodes the layout cools in about 90 ticks rather than 300:
+// each tick is slow there, and every one redraws the whole graph. Repulsion
+// also reaches the whole graph, or the pull to the centre packs it into a
+// heap, and that pull is doubled so unlinked notes ring the rest closely.
 const LARGE = 5000;
 const LARGE_ALPHA_DECAY = 0.05;
 const ALPHA_DECAY = 1 - 0.001 ** (1 / 300);
 const NEAR = 400;
+const CENTRE = 0.04;
+// With more links a node than this, links pull in proportion less. At full
+// strength they squeeze a densely linked vault into a lopsided clump with
+// its unlinked notes far outside; this keeps it a disc.
+const FULL_STRENGTH_LINKS = 6;
 // A new layout ticks this long before its first positions, so it opens mostly
 // settled rather than exploding outwards.
 const WARMUP_MS = 300;
@@ -86,7 +91,12 @@ self.onmessage = (event: MessageEvent<LayoutRequest>) => {
         chargeReach: large ? Infinity : NEAR,
         // Coarser grouping settles a big graph into the same shape, sooner.
         theta: large ? 1.2 : 0.9,
-        collide: !large
+        collide: true,
+        centre: large ? 2 * CENTRE : CENTRE,
+        linkStrength: Math.min(
+          1,
+          (FULL_STRENGTH_LINKS * request.radius.length) / request.links.length
+        )
       });
       if (request.warmup) {
         const until = performance.now() + WARMUP_MS;

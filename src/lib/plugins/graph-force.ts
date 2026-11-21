@@ -1,14 +1,12 @@
 /**
  * The force layout behind a schema view's `graph`: links pull, nodes repel,
- * everything is drawn to the origin, and on small graphs nodes don't overlap.
- * The forces and their constants are d3-force's, so a graph looks as it does
- * there. It is written over typed arrays because d3's object per node and
+ * everything is drawn to the origin, and nodes don't overlap. The forces are
+ * d3-force's. It is written over typed arrays because d3's object per node and
  * per link costs several times as much on a graph of tens of thousands.
  */
 
 const LINK_DISTANCE = 40;
 const CHARGE = -60;
-const CENTRE = 0.04;
 const VELOCITY_KEEP = 0.6;
 const ALPHA_MIN = 0.001;
 const COLLIDE_PAD = 2;
@@ -34,6 +32,13 @@ export interface ForceOptions {
    */
   theta: number;
   collide: boolean;
+  /** How hard nodes are drawn to the origin: 0.04 is the usual. */
+  centre: number;
+  /**
+   * Scales every link's pull. Below 1 suits a graph with so many links that
+   * they would otherwise crush it into a lopsided clump.
+   */
+  linkStrength: number;
 }
 
 export interface ForceLayout {
@@ -86,7 +91,7 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   for (let l = 0; l < m; l++) {
     const a = degree[links[2 * l]];
     const b = degree[links[2 * l + 1]];
-    linkStrength[l] = 1 / Math.min(a, b);
+    linkStrength[l] = options.linkStrength / Math.min(a, b);
     linkBias[l] = a / (a + b);
   }
 
@@ -302,22 +307,27 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   }
 
   // Nodes by grid cell, each cell as wide as the widest pair that can touch.
-  const gridHead = new Map<number, number>();
+  // Cells hash into a table, so two cells can share a slot: that only adds
+  // nodes too far apart to touch, which the distance check drops.
+  let slots = 16;
+  while (slots < 2 * n) slots *= 2;
+  const gridHead = new Int32Array(options.collide ? slots : 0);
   const gridNext = new Int32Array(options.collide ? n : 0);
   let maxRadius = 0;
   for (let i = 0; i < n; i++) maxRadius = Math.max(maxRadius, radius[i]);
   const gridSize = 2 * (maxRadius + COLLIDE_PAD);
+  const slot = (cx: number, cy: number) =>
+    (Math.imul(cx, 73856093) ^ Math.imul(cy, 19349663)) & (slots - 1);
 
   function collide() {
-    gridHead.clear();
-    const key = (cx: number, cy: number) => cx * 73856093 + cy * 19349663;
+    gridHead.fill(-1);
     for (let i = 0; i < n; i++) {
-      const k = key(
+      const k = slot(
         Math.floor((x[i] + vx[i]) / gridSize),
         Math.floor((y[i] + vy[i]) / gridSize)
       );
-      gridNext[i] = gridHead.get(k) ?? -1;
-      gridHead.set(k, i);
+      gridNext[i] = gridHead[k];
+      gridHead[k] = i;
     }
     for (let i = 0; i < n; i++) {
       const xi = x[i] + vx[i];
@@ -325,14 +335,14 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       const ri = radius[i] + COLLIDE_PAD;
       const cx = Math.floor(xi / gridSize);
       const cy = Math.floor(yi / gridSize);
-      for (let gx = cx - 1; gx <= cx + 1; gx++) {
-        for (let gy = cy - 1; gy <= cy + 1; gy++) {
-          for (
-            let j = gridHead.get(key(gx, gy)) ?? -1;
-            j >= 0;
-            j = gridNext[j]
-          ) {
-            if (j <= i) continue;
+      // A pair is met once: in its own cell from the lower index, and
+      // across cells from the one whose cell comes first.
+      for (let c = 0; c < 5; c++) {
+        {
+          const gx = cx + (c === 0 || c === 4 ? 0 : 1);
+          const gy = cy + (c === 0 ? 0 : c === 4 ? 1 : c - 2);
+          for (let j = gridHead[slot(gx, gy)]; j >= 0; j = gridNext[j]) {
+            if (c === 0 && j <= i) continue;
             const rj = radius[j] + COLLIDE_PAD;
             const r = ri + rj;
             let dx = xi - x[j] - vx[j];
@@ -369,8 +379,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       if (n > 1) charge(alpha);
       pull(alpha);
       for (let i = 0; i < n; i++) {
-        vx[i] -= x[i] * CENTRE * alpha;
-        vy[i] -= y[i] * CENTRE * alpha;
+        vx[i] -= x[i] * options.centre * alpha;
+        vy[i] -= y[i] * options.centre * alpha;
       }
       if (options.collide) collide();
       for (let i = 0; i < n; i++) {
