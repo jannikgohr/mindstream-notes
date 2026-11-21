@@ -46,8 +46,8 @@ in the [documentation index](../README.md).
 - [First-run setup](onboarding.md): what setup does and where it stores its
   state
 - [Plugin host API design](plugin-host-api-design.md): which capabilities
-  belong in the host, proposals for new ones, and why batching is shaped the
-  way it is
+  belong in the host, the decided note events, jobs and ink APIs, proposals
+  for other capabilities, and why batching is shaped the way it is
 - [Shared ink and PDF documents](ink-pdf-unification-plan.md): how handwriting
   and PDFs share one document model
 - [Vault runtime spike](vault-runtime-spike.md) and
