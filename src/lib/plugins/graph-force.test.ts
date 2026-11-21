@@ -16,6 +16,8 @@ function layoutOf(
     chargeReach: Infinity,
     theta: 0.9,
     collide: true,
+    centre: 0.04,
+    linkStrength: 1,
     ...overrides
   });
 }
@@ -57,6 +59,20 @@ describe('createForceLayout', () => {
       for (let b = a + 1; b < 5; b++)
         expect(distance(layout, a, b)).toBeGreaterThan(8);
     }
+  });
+
+  it('keeps the many notes around one hub from overlapping', () => {
+    const leaves = 300;
+    const layout = layoutOf(
+      leaves + 1,
+      Array.from({ length: leaves }, (_, i) => [0, i + 1]).flat()
+    );
+    settle(layout);
+    let closest = Infinity;
+    for (let a = 0; a <= leaves; a++)
+      for (let b = a + 1; b <= leaves; b++)
+        closest = Math.min(closest, distance(layout, a, b));
+    expect(closest).toBeGreaterThanOrEqual(8);
   });
 
   it('groups far nodes without changing where the layout pushes', () => {
