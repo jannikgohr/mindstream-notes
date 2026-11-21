@@ -6,6 +6,7 @@
   import { Trash2 } from '@lucide/svelte';
   import { Button } from '$lib/components/ui/button';
   import SettingControl from '$lib/settings/SettingControl.svelte';
+  import SettingSelect from '$lib/settings/SettingSelect.svelte';
   import { tLabel, tUi } from '$lib/settings/i18n.svelte';
   import { isModified, isVisible } from '$lib/settings/store.svelte';
   import {
@@ -29,6 +30,9 @@
     )
   );
   let name = $state('');
+  // The list's entry for no preset. A preset name is trimmed, so it can't
+  // be this.
+  const NO_PRESET = ' ';
 
   function report(task: Promise<void>) {
     task.catch((err) => console.error('[plugins] preset failed', err));
@@ -51,26 +55,25 @@
       {tUi('presets.title')}
     </h3>
     <div class="mt-2 flex items-center gap-1.5">
-      <select
-        class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-        aria-label={tUi('presets.title')}
-        value={active ?? ''}
-        onchange={(event) => {
-          const picked = event.currentTarget.value;
+      <SettingSelect
+        settingId=""
+        class="h-8 min-w-0 flex-1 text-xs"
+        ariaLabel={tUi('presets.title')}
+        value={active ?? NO_PRESET}
+        options={[NO_PRESET, ...presets.map((preset) => preset.name)]}
+        labelFor={(option) =>
+          option !== NO_PRESET
+            ? option
+            : active === undefined && changed
+              ? tUi('presets.unsaved')
+              : tUi('presets.defaults')}
+        onChange={(picked) =>
           report(
-            picked ? applyPreset(pluginId, picked) : resetSettings(pluginId)
-          );
-        }}
-      >
-        <option value="">
-          {active === undefined && changed
-            ? tUi('presets.unsaved')
-            : tUi('presets.defaults')}
-        </option>
-        {#each presets as preset (preset.name)}
-          <option value={preset.name}>{preset.name}</option>
-        {/each}
-      </select>
+            picked === NO_PRESET
+              ? resetSettings(pluginId)
+              : applyPreset(pluginId, picked)
+          )}
+      />
       {#if active}
         <Button
           variant="ghost"
