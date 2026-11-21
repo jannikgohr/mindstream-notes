@@ -71,7 +71,14 @@
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { takeOnboardingNote } from '$lib/onboarding/store.svelte';
   import { runSync } from '$lib/sync/runner';
-  import { pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import {
+    pluginById,
+    pluginNoteKind,
+    pluginTabView
+  } from '$lib/plugins/registry.svelte';
+  import PluginTabView from '$lib/plugins/PluginTabView.svelte';
+  import { onOpenTabView, tabViewPanelId } from '$lib/plugins/tab-views';
+  import { viewText } from '$lib/plugins/view-schema';
   import { installFileDropRouter } from '$lib/file-drop';
   import { importDroppedPdfs } from '$lib/file-drop-import';
   import { pushToast } from '$lib/components/toast.svelte';
@@ -84,6 +91,9 @@
   let lastActiveGroup: DockviewGroupPanel | null = null;
   const openPanels = new Map<string, IDockviewPanel>();
   let openPanelCount = $state(0);
+  // Plugin tab views, by panel id.
+  const viewPanels = new Map<string, IDockviewPanel>();
+  let viewPanelCount = $state(0);
   // Notes whose tab is a preview: at most one per group, replaced by the
   // next preview open there. Not persisted, so a restored layout has none.
   const previewNotes = new SvelteSet<string>();
@@ -214,6 +224,71 @@
     }
   }
 
+  type ViewParams = { pluginId?: string; viewId?: string };
+
+  /** A plugin's tab view inside a dockview panel. */
+  class TabViewRenderer implements IContentRenderer {
+    private el: HTMLElement = document.createElement('div');
+    private instance: ReturnType<typeof mount> | null = null;
+
+    get element(): HTMLElement {
+      return this.el;
+    }
+
+    init(parameters: GroupPanelPartInitParameters): void {
+      this.el.style.height = '100%';
+      this.el.style.width = '100%';
+      const { pluginId, viewId } = parameters.params as ViewParams;
+      if (!pluginId || !viewId) return;
+      this.instance = mount(PluginTabView, {
+        target: this.el,
+        props: { pluginId, viewId }
+      });
+    }
+
+    dispose(): void {
+      if (this.instance) {
+        void unmount(this.instance).catch((err: unknown) =>
+          console.error('[desktop] unmount failed', err)
+        );
+        this.instance = null;
+      }
+    }
+  }
+
+  function tabViewTitle(pluginId: string, viewId: string): string | null {
+    const ref = pluginTabView(pluginId, viewId);
+    return ref
+      ? viewText(pluginId, { key: ref.view.labelKey, params: {} })
+      : null;
+  }
+
+  function isViewPanel(panel: IDockviewPanel): boolean {
+    return !!(panel.params as ViewParams | undefined)?.viewId;
+  }
+
+  function openTabViewPanel(pluginId: string, viewId: string) {
+    if (!dock) return;
+    const id = tabViewPanelId(pluginId, viewId);
+    const existing = dock.getPanel(id);
+    if (existing) {
+      existing.api.setActive();
+      return;
+    }
+    if (dock.groups.length === 0) {
+      dock.addGroup();
+      lastActiveGroup = dock.groups[0];
+    }
+    const target = lastActiveGroup ?? dock.activeGroup ?? null;
+    dock.addPanel({
+      id,
+      component: 'pluginTabView',
+      title: tabViewTitle(pluginId, viewId) ?? viewId,
+      params: { pluginId, viewId },
+      ...(target ? { position: { referenceGroup: target } } : {})
+    });
+  }
+
   async function setupDockview() {
     if (!dockHost) return;
     const { DockviewComponent, DefaultTab } = await import('dockview');
@@ -235,6 +310,8 @@
             return new SvelteRenderer(NoteKindRenderer, null);
           case 'unknownNoteKind':
             return new SvelteRenderer(NoteKindRenderer, null);
+          case 'pluginTabView':
+            return new TabViewRenderer();
           default:
             // Unknown renderer names must not fall back to markdown. A
             // binary/canvas note rendered in the text editor risks accidental
@@ -283,6 +360,8 @@
         openPanels.delete(noteId);
         pinNote(noteId);
       }
+      viewPanels.delete(panel.id);
+      viewPanelCount = viewPanels.size;
       openPanelCount = openPanels.size;
       setActiveNote(
         (dock?.activePanel?.params as { noteId?: string } | undefined)
@@ -293,6 +372,8 @@
     dock.onDidAddPanel((panel) => {
       const noteId = (panel.params as { noteId?: string } | undefined)?.noteId;
       if (noteId) openPanels.set(noteId, panel);
+      if (isViewPanel(panel)) viewPanels.set(panel.id, panel);
+      viewPanelCount = viewPanels.size;
       openPanelCount = openPanels.size;
       schedulePersist();
     });
@@ -357,14 +438,23 @@
     const saved = loadSavedLayout(vaultId);
     if (!saved || !saved.dock) return false;
     try {
-      const sanitized = sanitizeDockBlob(saved.dock, (noteId) => {
-        const note = tree.notesById[noteId];
-        if (!note) return null;
-        return {
-          component: componentForNoteKind(note.note_kind),
-          title: note.title
-        };
-      });
+      const sanitized = sanitizeDockBlob(
+        saved.dock,
+        (noteId) => {
+          const note = tree.notesById[noteId];
+          if (!note) return null;
+          return {
+            component: componentForNoteKind(note.note_kind),
+            title: note.title
+          };
+        },
+        // Plugins may not have loaded yet; a view whose plugin turns out
+        // to be off closes once it has.
+        (pluginId, viewId) => ({
+          component: 'pluginTabView',
+          title: tabViewTitle(pluginId, viewId)
+        })
+      );
       if (!sanitized) {
         void clearSavedLayout(vaultId);
         return false;
@@ -372,18 +462,21 @@
       const api = dock as unknown as { fromJSON: (s: unknown) => void };
       api.fromJSON(sanitized);
       openPanels.clear();
+      viewPanels.clear();
       for (const panel of dock.panels) {
         const noteId = (panel.params as { noteId?: string } | undefined)
           ?.noteId;
         if (noteId) openPanels.set(noteId, panel);
+        if (isViewPanel(panel)) viewPanels.set(panel.id, panel);
       }
       openPanelCount = openPanels.size;
+      viewPanelCount = viewPanels.size;
       if (saved.activeNoteId) {
         const p = openPanels.get(saved.activeNoteId);
         p?.api.setActive();
       }
       layoutReady = true;
-      return openPanels.size > 0;
+      return dock.panels.length > 0;
     } catch (err) {
       console.warn('[layout] restore failed, falling back', err);
       void clearSavedLayout(vaultId);
@@ -827,6 +920,7 @@
     const unsub = subscribeOpenNoteRequest((id, { preview }) => {
       void openNote(id, { preview });
     });
+    const stopTabViews = onOpenTabView(openTabViewPanel);
     // The note waits in Rust: this window may have been loading when it was
     // made, as after the worker unloaded it.
     const openCreatedNotes = () =>
@@ -936,6 +1030,7 @@
       clearDragging();
       stopCloseFlush();
       unsub();
+      stopTabViews();
       void trayUnlisten.then((unlisten) => unlisten());
       void showAppUnlisten.then((unlisten) => unlisten());
       void noteWindowUnlisten.then((unlisten) => unlisten());
@@ -989,6 +1084,21 @@
       const panel = openPanels.get(noteId);
       if (panel) panel.api.setTitle(tree.notesById[noteId].title);
     }
+  });
+
+  // A tab view closes when its plugin is off, or no longer has the view. A
+  // plugin that isn't registered may still be loading, so its tab stays.
+  $effect(() => {
+    void viewPanelCount;
+    const closing: IDockviewPanel[] = [];
+    for (const panel of viewPanels.values()) {
+      const { pluginId, viewId } = panel.params as ViewParams;
+      if (!pluginId || !viewId || !pluginById(pluginId)) continue;
+      const title = tabViewTitle(pluginId, viewId);
+      if (title === null) closing.push(panel);
+      else panel.api.setTitle(title);
+    }
+    for (const panel of closing) panel.api.close();
   });
 
   $effect(() => {
@@ -1137,7 +1247,7 @@
           bind:this={dockHost}
           class="dockview-theme-bridge h-full w-full"
         ></div>
-        {#if layoutReady && openPanelCount === 0}
+        {#if layoutReady && openPanelCount + viewPanelCount === 0}
           <!-- z-10 lifts it over dockview's watermark (absolute, z-index 1),
                which otherwise swallows every click. -->
           <div

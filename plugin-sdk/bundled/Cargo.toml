@@ -1,5 +1,5 @@
 [workspace]
-members = ["journal", "templates", "typst"]
+members = ["graph", "journal", "templates", "typst"]
 resolver = "2"
 
 [workspace.dependencies]

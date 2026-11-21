@@ -44,6 +44,14 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
 // ---------- Tauri commands ----------
 
 #[tauri::command]
+pub fn list_note_links(
+    db: tauri::State<'_, Db>,
+) -> CommandResult<Vec<mindstream_storage_core::note_links::NoteLinks>> {
+    db.with_conn(|c| mindstream_storage_core::note_links::list(c).map_err(Into::into))
+        .map_err(Into::into)
+}
+
+#[tauri::command]
 pub fn list_notes(
     db: tauri::State<'_, Db>,
     include_trashed: Option<bool>,

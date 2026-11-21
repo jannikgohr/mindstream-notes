@@ -9,6 +9,7 @@ pub mod error;
 pub mod history;
 pub mod import;
 pub mod migrations;
+pub mod note_links;
 pub mod notes;
 pub mod pdf_text;
 #[cfg(any(test, feature = "storage-proof"))]

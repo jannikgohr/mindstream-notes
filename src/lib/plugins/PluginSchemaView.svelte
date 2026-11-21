@@ -14,14 +14,17 @@
   import { Button } from '$lib/components/ui/button';
   import { i18n } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { ui } from '$lib/state.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { parsePluginEffect, runPluginEffect } from './effects';
   import { buildPluginContext } from './plugin-ctx';
   import PluginIcon from './PluginIcon.svelte';
-  import { pluginById, type PluginSidebarViewRef } from './registry.svelte';
+  import { pluginById } from './registry.svelte';
   import { runPluginScript } from './run-script';
   import SchemaCalendar from './SchemaCalendar.svelte';
+  import SchemaGraph from './SchemaGraph.svelte';
   import { onSidebarViewAction } from './sidebar-views';
+  import type { PluginViewRender } from './types';
   import {
     parseViewNode,
     viewText,
@@ -29,11 +32,22 @@
     type ViewNode
   } from './view-schema';
 
-  let { ref, source }: { ref: PluginSidebarViewRef; source: string } = $props();
+  let {
+    ref,
+    source,
+    tab = false
+  }: {
+    ref: { pluginId: string; view: { render: PluginViewRender } };
+    source: string;
+    /** Drawn as a main-area tab rather than in the sidebar. */
+    tab?: boolean;
+  } = $props();
 
   const pluginId = $derived(ref.pluginId);
   const render = $derived(ref.view.render);
-  let view = $state<ViewNode | null>(null);
+  // Raw: a graph view holds tens of thousands of nodes, and deep state would
+  // wrap each one in a proxy.
+  let view = $state.raw<ViewNode | null>(null);
   let failure = $state<string | null>(null);
   let queue: Promise<void> = Promise.resolve();
   let destroyed = false;
@@ -85,7 +99,8 @@
     });
   }
 
-  // What a render reads from: notes, the plugin's settings and the locale.
+  // What a render reads from: notes, the plugin's settings, the active note
+  // and the locale.
   let redrawTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     for (const note of Object.values(tree.notesById)) {
@@ -99,6 +114,7 @@
       void getSettingValue(`plugins.${pluginId}.${setting.id}`);
     }
     void i18n.language;
+    void ui.activeNoteId;
     if (redrawTimer) clearTimeout(redrawTimer);
     // Untracked: a redraw sets `view`, which must not schedule another.
     const delay = untrack(() => (view ? 150 : 0));
@@ -116,7 +132,9 @@
 </script>
 
 <div
-  class="themed-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3"
+  class="themed-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto {tab
+    ? 'h-full p-3'
+    : 'px-3 pb-3'}"
   data-plugin-view={source}
 >
   {#if failure}
@@ -127,7 +145,7 @@
 
 {#snippet node(n: ViewNode)}
   {#if n.type === 'stack'}
-    <div class="flex flex-col">
+    <div class="flex min-h-0 flex-1 flex-col">
       {#each n.children as child, i (i)}{@render node(child)}{/each}
     </div>
   {:else if n.type === 'heading'}
@@ -159,6 +177,11 @@
   {:else if n.type === 'calendar'}
     <SchemaCalendar
       {pluginId}
+      node={n}
+      onEvent={(event, value) => dispatch({ event }, value)}
+    />
+  {:else if n.type === 'graph'}
+    <SchemaGraph
       node={n}
       onEvent={(event, value) => dispatch({ event }, value)}
     />

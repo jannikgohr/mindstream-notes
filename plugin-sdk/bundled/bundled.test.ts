@@ -302,6 +302,139 @@ describe.each(['Rust', 'TypeScript'])(
   }
 );
 
+describe('Graph component', { timeout: 60_000 }, () => {
+  const notes = [
+    {
+      id: 'a',
+      title: 'Alpha',
+      folderPath: 'Work / Projects',
+      tags: ['z', 'b']
+    },
+    { id: 'b', title: 'Beta', folderPath: '', tags: ['b'] }
+  ];
+  const graph = (options: HostOptions = {}) =>
+    loadPlugin(component('graph'), {
+      permissions: ['notes.read'],
+      notes,
+      ...options
+    });
+  type Rendered = {
+    state: { local: boolean; focus?: string };
+    view: { children: Record<string, unknown>[] };
+  };
+
+  it('draws the whole vault in its tab: notes by top-level folder, and tags linked to their notes', async () => {
+    const plugin = await graph();
+    const tab = await plugin.call<Rendered>('renderTab', { state: null });
+    expect(tab.state).toEqual({ local: false });
+    expect(tab.view.children).toEqual([
+      {
+        type: 'graph',
+        nodes: [
+          { id: 'a', group: 'Work' },
+          { id: 'b' },
+          { id: 'tag:b', label: '#b' },
+          { id: 'tag:z', label: '#z' }
+        ],
+        links: [
+          ['a', 'tag:z'],
+          ['a', 'tag:b'],
+          ['b', 'tag:b']
+        ],
+        depth: 1,
+        orphans: true,
+        onSelect: 'open'
+      }
+    ]);
+
+    const plain = await graph({
+      settings: { 'color-by': 'tag', tags: false, orphans: false, depth: 3 }
+    });
+    const [node] = (await plain.call<Rendered>('renderTab', { state: null }))
+      .view.children;
+    expect(node).toMatchObject({
+      nodes: [
+        { id: 'a', group: 'b' },
+        { id: 'b', group: 'b' }
+      ],
+      links: [],
+      depth: 3,
+      orphans: false
+    });
+  });
+
+  it('follows the open note in the sidebar, and can show the whole vault there', async () => {
+    const plugin = await graph();
+    const local = await plugin.call<Rendered>('render', {
+      state: null,
+      activeNoteId: 'b'
+    });
+    expect(local.state).toEqual({ local: true });
+    expect(local.view.children[0]).toEqual({
+      type: 'button',
+      label: { key: 'view.showVault' },
+      on: { event: 'toggle' }
+    });
+    expect(local.view.children[1]).toMatchObject({ focus: 'b' });
+    const none = await plugin.call<Rendered>('render', { state: local.state });
+    expect(none.view.children.slice(1)).toMatchObject([
+      { type: 'text', text: { key: 'view.noActiveNote' } },
+      { type: 'graph', focus: '' }
+    ]);
+
+    const toggled = await plugin.call<Rendered>('onEvent', {
+      state: local.state,
+      event: 'toggle'
+    });
+    expect(toggled).toEqual({ state: { local: false } });
+    const vault = await plugin.call<Rendered>('render', {
+      state: toggled.state,
+      activeNoteId: 'b'
+    });
+    expect(vault.view.children[0]).toMatchObject({
+      label: { key: 'view.showLocal' }
+    });
+    expect(vault.view.children[1]).not.toHaveProperty('focus');
+  });
+
+  it('narrows to a clicked tag, opens a clicked note and opens its tab', async () => {
+    const plugin = await graph();
+    const state = { local: false };
+    const tagged = await plugin.call<Rendered>('onEvent', {
+      state,
+      event: 'open',
+      value: 'tag:b'
+    });
+    expect(tagged).toEqual({ state: { local: false, focus: 'tag:b' } });
+    const tab = await plugin.call<Rendered>('renderTab', {
+      state: tagged.state
+    });
+    expect(tab.view.children[0]).toMatchObject({
+      label: { key: 'view.showVault' }
+    });
+    expect(tab.view.children[1]).toMatchObject({ focus: 'tag:b' });
+    expect(
+      await plugin.call('onEvent', { state: tagged.state, event: 'toggle' })
+    ).toEqual({ state: { local: false } });
+
+    expect(
+      await plugin.call('onEvent', { state, event: 'open', value: 'a' })
+    ).toEqual({
+      state,
+      effect: { effect: 'openNote', noteId: 'a', preview: true }
+    });
+    await expect(
+      plugin.call('onEvent', { state, event: 'open', value: 'gone' })
+    ).rejects.toThrow(/no such note/);
+
+    const opened = { effect: 'openTabView', viewId: 'graph' };
+    expect(
+      await plugin.call('onEvent', { state, event: 'open-graph' })
+    ).toEqual({ state, effect: opened });
+    expect(await plugin.call('openGraph')).toEqual(opened);
+  });
+});
+
 describe('Journal component', { timeout: 60_000 }, () => {
   const journal = (options: HostOptions = {}) =>
     loadPlugin(component('journal'), {
@@ -533,6 +666,7 @@ it('every shipped plugin uses v2 and LanguageTool stays declarative', async () =
     .map((entry) => entry.name)
     .sort();
   expect(directories).toEqual([
+    'graph',
     'journal',
     'languagetool',
     'templates',

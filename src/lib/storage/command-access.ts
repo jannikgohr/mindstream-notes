@@ -108,6 +108,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   list_incoming_shares: 'read',
   list_note_versions: 'read',
   list_notes: 'read',
+  list_note_links: 'read',
   list_share_links: 'read',
   list_profiles: 'read',
   list_signatures: 'read',

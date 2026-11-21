@@ -130,6 +130,7 @@ export const CONTRIBUTION_POINTS = {
   noteExporters: null,
   toolbar: null,
   sidebarViews: null,
+  tabViews: null,
   artifacts: 'pluginArtifacts.download',
   nativeTools: 'nativeTools.runDeclared',
   nativeServices: 'nativeServices.run',
@@ -536,7 +537,20 @@ export interface PluginSidebarViewContribution {
   icon: string;
   /** Buttons in the action row above the navigation. A click reaches the view by `id`. */
   actions?: PluginSidebarViewAction[];
-  render: PluginSidebarViewRender;
+  render: PluginViewRender;
+}
+
+/**
+ * A view a plugin opens as a tab in the main area, beside notes, with the
+ * `openTabView` effect. At most one tab per view.
+ */
+export interface PluginTabViewContribution {
+  /** Plugin-local slug, named by `openTabView`. */
+  id: string;
+  /** The tab's title. */
+  labelKey: string;
+  icon: string;
+  render: PluginViewRender;
 }
 
 export interface PluginSidebarViewAction {
@@ -547,12 +561,12 @@ export interface PluginSidebarViewAction {
 }
 
 /**
- * How the host draws a sidebar view's body. `schema`: the host calls `render`
+ * How the host draws a sidebar or tab view's body. `schema`: the host calls `render`
  * with the view's state and draws the tree it returns from host components
  * (see view-schema.ts); interactions call `onEvent`, which returns the next
  * state and an effect.
  */
-export type PluginSidebarViewRender = {
+export type PluginViewRender = {
   type: 'schema';
   /** Export called as `render({ ...ctx, state })` → `{ state?, view }`. */
   render: string;
@@ -586,6 +600,8 @@ export type PluginEffect =
   | { effect: 'openMenu'; items: PluginEffectMenuItem[] }
   /** `preview` opens it in a preview tab where the app has them. */
   | { effect: 'openNote'; noteId: string; preview?: boolean }
+  /** Open, or bring forward, one of the plugin's own `tabViews`. */
+  | { effect: 'openTabView'; viewId: string }
   | {
       /**
        * Open the live note titled `title` directly in `parentId`, or create
@@ -849,6 +865,7 @@ export interface PluginContributions {
   commands?: PluginCommandContribution[];
   textCheckers?: PluginTextCheckerContribution[];
   sidebarViews?: PluginSidebarViewContribution[];
+  tabViews?: PluginTabViewContribution[];
   /** Ordered, file-backed documentation sections shown in the docs modal. */
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */

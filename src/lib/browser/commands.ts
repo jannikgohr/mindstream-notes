@@ -1,6 +1,7 @@
 import type {
   CreateNoteInput,
   Note,
+  NoteLinks,
   NoteSummary,
   UpdateNoteInput
 } from '../api/notes';
@@ -41,6 +42,7 @@ export interface BrowserCommands {
   update_collection: Operation<{ input: UpdateCollectionInput }, Collection>;
   delete_collection: Operation<Id, void>;
   search_notes: Operation<{ query: string }, SearchHit[]>;
+  list_note_links: Operation<Empty, NoteLinks[]>;
   note_word_count: Operation<{ noteId: string }, number>;
   move_many: Operation<
     { items: TreeItemRef[]; targetCollectionId: string | null },
@@ -110,6 +112,7 @@ const commands = {
   update_collection: true,
   delete_collection: true,
   search_notes: true,
+  list_note_links: true,
   note_word_count: true,
   move_many: true,
   trash_many: true,

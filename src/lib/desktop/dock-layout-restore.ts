@@ -6,7 +6,8 @@
  *      the layout was saved), then prune any groups / grid nodes that are left
  *      empty as a result.
  *   2. Refresh each surviving panel's `component` + `title` from the live note
- *      so a note that changed kind/name is re-rendered correctly.
+ *      so a note that changed kind/name is re-rendered correctly. A plugin
+ *      tab view's panel is refreshed from its resolver instead.
  *
  * Kept as plain functions (no Svelte/store deps) so the pruning rules can be
  * unit-tested directly — see dock-layout-restore.test.ts.
@@ -15,7 +16,7 @@
 export type SavedDockPanel = {
   component?: string;
   title?: string;
-  params?: { noteId?: string };
+  params?: { noteId?: string; pluginId?: string; viewId?: string };
 };
 export type SavedDockGroup = {
   views?: unknown;
@@ -49,9 +50,16 @@ export interface ResolvedPanel {
  */
 export type ResolvePanel = (noteId: string) => ResolvedPanel | null;
 
+/** A plugin tab view's panel; a `null` title keeps the saved one. */
+export type ResolveViewPanel = (
+  pluginId: string,
+  viewId: string
+) => { component: string; title: string | null } | null;
+
 export function sanitizeDockBlob(
   blob: unknown,
-  resolve: ResolvePanel
+  resolve: ResolvePanel,
+  resolveView: ResolveViewPanel = () => null
 ): unknown | null {
   try {
     const json = cloneDockBlob(blob);
@@ -60,6 +68,19 @@ export function sanitizeDockBlob(
     const validPanelIds = new Set<string>();
     let kept = 0;
     for (const [panelId, p] of Object.entries(panels)) {
+      const { pluginId, viewId } = p?.params ?? {};
+      if (typeof pluginId === 'string' && typeof viewId === 'string') {
+        const view = resolveView(pluginId, viewId);
+        if (!view) {
+          delete panels[panelId];
+          continue;
+        }
+        p.component = view.component;
+        p.title = view.title ?? p.title;
+        validPanelIds.add(panelId);
+        kept += 1;
+        continue;
+      }
       const noteId = p?.params?.noteId;
       const resolved = noteId ? resolve(noteId) : null;
       if (!noteId || !resolved) {

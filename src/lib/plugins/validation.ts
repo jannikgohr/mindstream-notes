@@ -51,6 +51,7 @@ import {
   type PluginSettingsContribution,
   type PluginCommandContribution,
   type PluginSidebarViewContribution,
+  type PluginTabViewContribution,
   type PluginTemplateVariable,
   type PluginToolbarButton,
   type PluginToolbarLocation,
@@ -1334,6 +1335,17 @@ function validateSidebarView(
   validateSidebarViewRender(pluginId, v.render, `${path}.render`);
 }
 
+function validateTabView(
+  pluginId: string,
+  v: PluginTabViewContribution,
+  path: string
+): void {
+  assertSlug(pluginId, v?.id, `${path}.id`);
+  assertI18nKey(pluginId, v.labelKey, `${path}.labelKey`);
+  assertSvgPath(pluginId, v.icon, `${path}.icon`);
+  validateSidebarViewRender(pluginId, v.render, `${path}.render`);
+}
+
 function validateSidebarViewRender(
   pluginId: string,
   render: unknown,
@@ -1347,7 +1359,7 @@ function validateSidebarViewRender(
   }
   throw new PluginValidationError(
     pluginId,
-    `${path}.type ("${String(r?.type)}") is not a supported sidebar view renderer`
+    `${path}.type ("${String(r?.type)}") is not a supported view renderer`
   );
 }
 
@@ -2040,6 +2052,20 @@ export function validateManifest(input: unknown): PluginManifest {
     throw new PluginValidationError(
       pluginId,
       'contributes sidebar views, which run backend script exports and require a scripted runtime ("wasm")'
+    );
+  }
+
+  // ---- Tab views --------------------------------------------------------
+  const tabViews = contributionList(contributes.tabViews, 'tabViews');
+  const seenTabViewIds = new Set<string>();
+  for (const [i, v] of tabViews.entries()) {
+    validateTabView(pluginId, v, `tabViews[${i}]`);
+    claimId(seenTabViewIds, v.id, 'tab view id');
+  }
+  if (tabViews.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes tab views, which run backend script exports and require a scripted runtime ("wasm")'
     );
   }
 

@@ -46,7 +46,7 @@ export function referencedExports(manifest) {
   for (const command of c.commands ?? []) {
     if (command.action?.type === 'script') names.add(command.action.export);
   }
-  for (const view of c.sidebarViews ?? []) {
+  for (const view of [...(c.sidebarViews ?? []), ...(c.tabViews ?? [])]) {
     if (view.render?.type === 'schema') {
       names.add(view.render.render);
       names.add(view.render.onEvent);
