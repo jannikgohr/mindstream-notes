@@ -95,6 +95,22 @@ describe('drawing export scene integration', () => {
     });
   });
 
+  it('reads a current scene without writing to the document', () => {
+    const doc = document();
+    const meta = doc.getMap('excalidraw:scene');
+    meta.set('version', 2);
+    meta.set('elementOrder', ['shape']);
+    meta.set('appState', { name: 'Diagram', viewBackgroundColor: '#ffffff' });
+    doc.getMap('excalidraw:elements').set('shape', { id: 'shape', x: 10 });
+    const updates: Uint8Array[] = [];
+    doc.on('update', (update: Uint8Array) => updates.push(update));
+
+    readSceneFromYDoc(doc);
+    readSceneFromYDoc(doc);
+
+    expect(updates).toEqual([]);
+  });
+
   it('migrates legacy snapshots and keeps their inline image bytes', async () => {
     const doc = document();
     const meta = doc.getMap('excalidraw:scene');

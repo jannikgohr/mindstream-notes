@@ -110,11 +110,11 @@
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
 
-  // Excalidraw bumps element version nonces when it re-imports a scene on
-  // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
-  // gate that churn marks the note dirty and snapshots a "no-edit" version on
-  // the next close/remount. A real edit is always preceded by a pointer or key
-  // interaction on the canvas, so only arm history capture once that happens.
+  // A first open can still write once without an edit: a new canvas stores
+  // Excalidraw's default appState, and older scenes are migrated or get
+  // fractional indices. That write must not become a "no-edit" version. A real
+  // edit is always preceded by a pointer or key interaction on the canvas, so
+  // only arm history capture once that happens.
   let canvasInteracted = false;
   let capturingHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;

@@ -132,12 +132,11 @@ function migrateLegacySnapshot(yDoc: Y.Doc): void {
   const legacyElements = meta.get('elements') as
     | readonly ExcalidrawElement[]
     | undefined;
-  const legacyAppState = meta.get('appState') as
-    | Partial<PersistedAppState>
-    | undefined;
   const legacyFiles = meta.get('files') as BinaryFiles | undefined;
 
-  if (!legacyElements && !legacyAppState && !legacyFiles) return;
+  // Legacy and current scenes keep appState under the same key, so it never
+  // marks a scene as legacy. Treating it as one rewrote every scene on read.
+  if (!legacyElements && !legacyFiles) return;
 
   const eMap = elementsMap(yDoc);
   const fMap = filesMap(yDoc);
@@ -151,7 +150,6 @@ function migrateLegacySnapshot(yDoc: Y.Doc): void {
         legacyElements.map((element) => element.id)
       );
     }
-    if (legacyAppState) meta.set('appState', cloneJson(legacyAppState));
     if (legacyFiles) {
       for (const [id, file] of Object.entries(legacyFiles)) {
         fMap.set(id, cloneJson(file));
