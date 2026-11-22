@@ -218,9 +218,9 @@
   <div class="mt-3 flex flex-wrap items-center gap-1">
     {#each noteTags as tag (tag)}
       <span
-        class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
+        class="inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
       >
-        {@render path(tag)}
+        <span class="min-w-0 truncate" title={tag}>{@render path(tag)}</span>
         <button
           type="button"
           class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
