@@ -328,7 +328,8 @@
       type="button"
       class="flex h-6 flex-1 items-center truncate rounded-sm px-2 text-left font-mono leading-none transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-current"
       disabled={!clickable}
-      use:tooltip={node.fullPath}
+      title={clickable ? undefined : node.fullPath}
+      use:tooltip={clickable ? node.fullPath : null}
       onclick={() => handlePick(node.fullPath)}
     >
       <span
