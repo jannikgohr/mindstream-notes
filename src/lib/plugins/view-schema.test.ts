@@ -135,6 +135,7 @@ describe('parseViewNode', () => {
         orphans: false,
         forces: { centre: 0.5, repel: 9, link: 'x', linkDistance: 1 },
         directions: true,
+        action: { label: 'Back', on: { event: 'unfocus' } },
         onSelect: 'open'
       })
     ).toEqual({
@@ -150,6 +151,7 @@ describe('parseViewNode', () => {
       orphans: false,
       forces: { centre: 0.5, repel: 2, link: undefined, linkDistance: 10 },
       directions: true,
+      action: { label: 'Back', on: { event: 'unfocus' } },
       onSelect: 'open'
     });
     expect(

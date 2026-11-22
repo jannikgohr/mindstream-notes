@@ -36,18 +36,20 @@
   import PluginSettingsPanel from './PluginSettingsPanel.svelte';
   import { indexGraph, type GraphIndex } from './schema-graph';
   import { pluginSettingsSectionsFor } from './settings-bridge';
-  import type { ViewNode } from './view-schema';
+  import { viewText, type ViewAction, type ViewNode } from './view-schema';
 
   type GraphNode = Extract<ViewNode, { type: 'graph' }>;
   let {
     pluginId,
     node,
-    onEvent
+    onEvent,
+    onAction
   }: {
     /** The plugin whose settings the gear opens. */
     pluginId: string;
     node: GraphNode;
     onEvent: (event: string, value: string) => void;
+    onAction: (action: ViewAction) => void;
   } = $props();
 
   const hasSettings = $derived(pluginSettingsSectionsFor(pluginId).length > 0);
@@ -713,12 +715,25 @@
     ctx.font = `11px ${css.fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillStyle = token('--foreground');
-    const label = (i: number, alpha: number) => {
+    const foreground = token('--foreground');
+    const backdrop = token('--background');
+    ctx.fillStyle = foreground;
+    // `plate` puts the name on a patch of background, to read over the
+    // names and links under it.
+    const label = (i: number, alpha: number, plate = false) => {
       if (!labels[i] || Number.isNaN(xs[i]) || outside(i)) return;
-      ctx.globalAlpha = alpha;
       const sx = width / 2 + camera.x + xs[i] * k;
       const sy = height / 2 + camera.y + (ys[i] + radius[i]) * k + 3;
+      if (plate) {
+        const wide = Math.min(ctx.measureText(labels[i]).width, 160) + 8;
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = backdrop;
+        ctx.beginPath();
+        ctx.roundRect(sx - wide / 2, sy - 2, wide, 15, 4);
+        ctx.fill();
+        ctx.fillStyle = foreground;
+      }
+      ctx.globalAlpha = alpha;
       ctx.fillText(labels[i], sx, sy, 160);
     };
     if (zoomAlpha > 0) {
@@ -733,9 +748,9 @@
     }
     if (focus >= 0) label(focus, 1);
     if (hovered >= 0) {
-      label(hovered, 1);
       for (let e = offset[hovered]; e < offset[hovered + 1]; e++)
-        label(adjacent[e], 1);
+        label(adjacent[e], 1, true);
+      label(hovered, 1, true);
     }
     ctx.globalAlpha = 1;
   }
@@ -939,23 +954,36 @@
     }}
     oncontextmenu={(event) => event.preventDefault()}
   ></canvas>
-  {#if legend}
-    <ul
-      class="pointer-events-none absolute left-2 top-2 flex flex-col gap-0.5 text-[11px] text-muted-foreground"
-    >
-      {#each [1, 2, 3] as relation (relation)}
-        <li class="flex items-center gap-1.5">
-          <span
-            class="size-2 rounded-full"
-            style="background: var(--named-{GROUP_COLOURS[
-              RELATION_COLOURS[relation]
-            ]})"
-          ></span>
-          {tUi(RELATION_LABELS[relation])}
-        </li>
-      {/each}
-    </ul>
-  {/if}
+  <div
+    class="pointer-events-none absolute left-1 top-1 flex max-w-[calc(100%-5rem)] flex-col items-start gap-2"
+  >
+    {#if node.action}
+      {@const action = node.action}
+      <Button
+        variant="outline"
+        size="sm"
+        class="pointer-events-auto h-8 max-w-full bg-surface-1 text-xs"
+        onclick={() => onAction(action.on)}
+      >
+        <span class="truncate">{viewText(pluginId, action.label)}</span>
+      </Button>
+    {/if}
+    {#if legend}
+      <ul class="ml-1 flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+        {#each [1, 2, 3] as relation (relation)}
+          <li class="flex items-center gap-1.5">
+            <span
+              class="size-2 rounded-full"
+              style="background: var(--named-{GROUP_COLOURS[
+                RELATION_COLOURS[relation]
+              ]})"
+            ></span>
+            {tUi(RELATION_LABELS[relation])}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
   {#if !empty}
     <Button
       variant="ghost"

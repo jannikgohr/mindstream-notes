@@ -121,6 +121,8 @@ export type ViewNode =
        * links to them, they link to it, or both.
        */
       directions: boolean;
+      /** A button drawn over the top left corner of the graph. */
+      action?: { label: ViewText; on: ViewAction };
       /** Event sent with the clicked node's ID as `value`. */
       onSelect: string;
     };
@@ -376,6 +378,9 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
           ? Math.min(Math.max(raw, min), max)
           : undefined;
       const forces = isObject(value.forces) ? value.forces : {};
+      const given = isObject(value.action) ? value.action : {};
+      const actionLabel = displayText(given.label);
+      const actionOn = parseViewAction(given.on);
       return {
         type: 'graph',
         nodes,
@@ -390,6 +395,10 @@ export function parseViewNode(value: unknown, depth = 0): ViewNode | null {
           linkDistance: within(forces.linkDistance, 10, 200)
         },
         directions: value.directions === true,
+        action:
+          actionLabel !== undefined && actionOn
+            ? { label: actionLabel, on: actionOn }
+            : undefined,
         onSelect
       };
     }

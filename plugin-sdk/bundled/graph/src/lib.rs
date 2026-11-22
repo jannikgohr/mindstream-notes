@@ -143,14 +143,6 @@ impl Graph<'_> {
             nodes.push(json!({ "id": format!("{TAG_PREFIX}{tag}"), "label": format!("#{tag}") }));
         }
 
-        let mut children = Vec::new();
-        if focus.is_some() {
-            children.push(json!({
-                "type": "button",
-                "label": { "key": if local { "view.showLocal" } else { "view.showVault" } },
-                "on": { "event": "unfocus" },
-            }));
-        }
         let mut graph = json!({
             "type": "graph",
             "nodes": nodes,
@@ -169,11 +161,17 @@ impl Graph<'_> {
         if let Some(centre) = centre {
             graph["focus"] = json!(centre);
         }
-        children.push(graph);
+        // A clicked tag narrows the view; this leads back out of it.
+        if focus.is_some() {
+            graph["action"] = json!({
+                "label": { "key": if local { "view.showLocal" } else { "view.showVault" } },
+                "on": { "event": "unfocus" },
+            });
+        }
 
         Ok(json!({
             "state": state(focus),
-            "view": { "type": "stack", "children": children },
+            "view": { "type": "stack", "children": [graph] },
         }))
     }
 
