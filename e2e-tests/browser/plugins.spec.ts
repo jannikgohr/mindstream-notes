@@ -112,6 +112,23 @@ test.describe('plugin framework — bundled Templates plugin', () => {
       .click();
     // The plugin contributes a "Template sources" section with a folder setting.
     await expect(dialog.getByText('Template folder')).toBeVisible();
+    // The clicked button is gone, so focus moves to the new pane rather than
+    // falling back to the search box.
+    await expect(
+      dialog.getByRole('region', { name: 'Templates' })
+    ).toBeFocused();
+
+    await dialog
+      .getByRole('button', { name: 'Plugins', exact: true })
+      .first()
+      .click();
+    await dialog
+      .getByRole('button', { name: 'Plugin hotkeys' })
+      .first()
+      .click();
+    await expect(
+      dialog.getByRole('region', { name: 'Hotkeys', exact: true })
+    ).toBeFocused();
   });
 
   test('toggling the plugin adds/removes its toolbar contribution', async ({
