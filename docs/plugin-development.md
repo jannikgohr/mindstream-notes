@@ -680,6 +680,9 @@ is the length a link rests at, from 10 to 200 with 40 the usual.
 `directions: true` colours the notes around the hovered or focused one by
 whether it links to them, they link to it, or both.
 
+`action` (`{ label, on }`) is a button over the top left corner of the graph,
+for a way back out of a narrowed view, say.
+
 A graph of a plugin with settings has a button that opens those settings
 beside it, with presets: named sets of the plugin's setting values that the
 user saves and switches between. Presets are kept with the vault, and a

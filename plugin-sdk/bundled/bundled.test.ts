@@ -428,16 +428,17 @@ describe('Graph component', { timeout: 60_000 }, () => {
       state: tagged.state
     });
     expect(tab.view.children).toMatchObject([
-      { label: { key: 'view.showVault' }, on: { event: 'unfocus' } },
-      { focus: 'tag:b' }
+      {
+        focus: 'tag:b',
+        action: { label: { key: 'view.showVault' }, on: { event: 'unfocus' } }
+      }
     ]);
     const side = await plugin.call<Rendered>('render', {
       state: tagged.state,
       activeNoteId: 'b'
     });
     expect(side.view.children).toMatchObject([
-      { label: { key: 'view.showLocal' } },
-      { focus: 'tag:b' }
+      { focus: 'tag:b', action: { label: { key: 'view.showLocal' } } }
     ]);
     expect(
       await plugin.call('onEvent', { state: tagged.state, event: 'unfocus' })

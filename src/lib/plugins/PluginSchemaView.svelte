@@ -185,6 +185,7 @@
       {pluginId}
       node={n}
       onEvent={(event, value) => dispatch({ event }, value)}
+      onAction={dispatch}
     />
   {:else if n.type === 'list'}
     <ul class="flex flex-col text-[13px]">
