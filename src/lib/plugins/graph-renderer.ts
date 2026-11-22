@@ -64,6 +64,15 @@ export interface GraphFrame {
   /** Draw only the first this many nodes and link ends: a growing graph. */
   nodes: number;
   linkEnds: number;
+  /**
+   * Draw one link in this many, for a device the links are too many for:
+   * `linkEvery` of those with both ends on screen, `leavingEvery` of those
+   * with one, `throughEvery` of those that only cross it. 1 draws them all.
+   * The links kept at 4 are kept at 1 too.
+   */
+  linkEvery: number;
+  leavingEvery: number;
+  throughEvery: number;
   /** PALETTE_SIZE colours, four floats each; the last is the accent. */
   palette: Float32Array;
   link: Rgba;
@@ -83,7 +92,34 @@ export interface GraphRenderer {
   destroy(): void;
 }
 
+// A link is an instance holding its two node indexes, and reads where they
+// are from a texture. Knowing both ends, it can leave itself out: see
+// `linkEvery`, `leavingEvery` and `throughEvery`.
 const LINK_VERTEX = `#version 300 es
+in uvec2 a_ends;
+uniform highp sampler2D u_positions;
+uniform vec4 u_view;
+uniform int u_every;
+uniform int u_leaving;
+uniform int u_through;
+vec2 place(uint node) {
+  int wide = textureSize(u_positions, 0).x;
+  vec2 world = texelFetch(u_positions, ivec2(int(node) % wide, int(node) / wide), 0).xy;
+  return world * u_view.xy + u_view.zw;
+}
+void main() {
+  vec2 a = place(a_ends.x);
+  vec2 b = place(a_ends.y);
+  int seen = int(all(lessThan(abs(a), vec2(1.0)))) + int(all(lessThan(abs(b), vec2(1.0))));
+  int every = seen == 2 ? u_every : seen == 1 ? u_leaving : u_through;
+  bool kept = gl_InstanceID % every == 0;
+  gl_Position = kept
+    ? vec4(gl_VertexID == 0 ? a : b, 0.0, 1.0)
+    : vec4(2.0, 2.0, 2.0, 1.0);
+}`;
+
+// The few links lit on top, by index into the nodes' positions.
+const LIT_VERTEX = `#version 300 es
 in vec2 a_pos;
 uniform vec4 u_view;
 void main() {
@@ -175,9 +211,11 @@ export function createGraphRenderer(
   }
 
   let linkProgram: WebGLProgram;
+  let litProgram: WebGLProgram;
   let nodeProgram: WebGLProgram;
   try {
     linkProgram = program(LINK_VERTEX, LINK_FRAGMENT);
+    litProgram = program(LIT_VERTEX, LINK_FRAGMENT);
     nodeProgram = program(NODE_VERTEX, NODE_FRAGMENT);
   } catch (error) {
     console.error('[graph]', error);
@@ -187,7 +225,15 @@ export function createGraphRenderer(
     gl.getUniformLocation(p, name);
   const linkUniforms = {
     view: uniform(linkProgram, 'u_view'),
-    colour: uniform(linkProgram, 'u_colour')
+    colour: uniform(linkProgram, 'u_colour'),
+    positions: uniform(linkProgram, 'u_positions'),
+    every: uniform(linkProgram, 'u_every'),
+    leaving: uniform(linkProgram, 'u_leaving'),
+    through: uniform(linkProgram, 'u_through')
+  };
+  const litUniforms = {
+    view: uniform(litProgram, 'u_view'),
+    colour: uniform(litProgram, 'u_colour')
   };
   const nodeUniforms = {
     view: uniform(nodeProgram, 'u_view'),
@@ -198,18 +244,33 @@ export function createGraphRenderer(
   };
 
   const positions = gl.createBuffer();
-  const linkIndex = gl.createBuffer();
+  const linkEnds = gl.createBuffer();
   const litIndex = gl.createBuffer();
+  // The nodes' positions again, as a texture the links read: as many texels
+  // as nodes, in rows of TEXTURE_WIDE.
+  const TEXTURE_WIDE = 1024;
+  const positionTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, positionTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   const corners = gl.createBuffer();
   const radii = gl.createBuffer();
   const styleBuffer = gl.createBuffer();
 
   const linkArray = gl.createVertexArray();
   gl.bindVertexArray(linkArray);
+  gl.bindBuffer(gl.ARRAY_BUFFER, linkEnds);
+  const ends = gl.getAttribLocation(linkProgram, 'a_ends');
+  gl.enableVertexAttribArray(ends);
+  gl.vertexAttribIPointer(ends, 2, gl.UNSIGNED_INT, 0, 0);
+  gl.vertexAttribDivisor(ends, 1);
+
+  const litArray = gl.createVertexArray();
+  gl.bindVertexArray(litArray);
   gl.bindBuffer(gl.ARRAY_BUFFER, positions);
-  const linkPos = gl.getAttribLocation(linkProgram, 'a_pos');
-  gl.enableVertexAttribArray(linkPos);
-  gl.vertexAttribPointer(linkPos, 2, gl.FLOAT, false, 0, 0);
+  const litPos = gl.getAttribLocation(litProgram, 'a_pos');
+  gl.enableVertexAttribArray(litPos);
+  gl.vertexAttribPointer(litPos, 2, gl.FLOAT, false, 0, 0);
 
   const nodeArray = gl.createVertexArray();
   gl.bindVertexArray(nodeArray);
@@ -246,22 +307,36 @@ export function createGraphRenderer(
   let linkCount = 0;
   let litCount = 0;
   let packed = new Float32Array(0);
+  let rows = 1;
 
   return {
     setScene(scene) {
       nodes = scene.radius.length;
       linkCount = scene.links.length;
       litCount = 0;
-      packed = new Float32Array(nodes * 2);
+      rows = Math.max(1, Math.ceil(nodes / TEXTURE_WIDE));
+      packed = new Float32Array(TEXTURE_WIDE * rows * 2);
       gl.bindVertexArray(null);
       gl.bindBuffer(gl.ARRAY_BUFFER, positions);
-      gl.bufferData(gl.ARRAY_BUFFER, packed, gl.DYNAMIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, nodes * 8, gl.DYNAMIC_DRAW);
+      gl.bindTexture(gl.TEXTURE_2D, positionTexture);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RG32F,
+        TEXTURE_WIDE,
+        rows,
+        0,
+        gl.RG,
+        gl.FLOAT,
+        packed
+      );
       gl.bindBuffer(gl.ARRAY_BUFFER, radii);
       gl.bufferData(gl.ARRAY_BUFFER, scene.radius, gl.STATIC_DRAW);
       gl.bindBuffer(gl.ARRAY_BUFFER, styleBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, scene.styles, gl.DYNAMIC_DRAW);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, linkIndex);
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, scene.links, gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, linkEnds);
+      gl.bufferData(gl.ARRAY_BUFFER, scene.links, gl.STATIC_DRAW);
     },
     setStyles(styles) {
       gl.bindBuffer(gl.ARRAY_BUFFER, styleBuffer);
@@ -273,13 +348,26 @@ export function createGraphRenderer(
         packed[2 * i + 1] = y[i];
       }
       gl.bindBuffer(gl.ARRAY_BUFFER, positions);
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, packed);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, packed, 0, nodes * 2);
+      gl.bindTexture(gl.TEXTURE_2D, positionTexture);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        TEXTURE_WIDE,
+        rows,
+        gl.RG,
+        gl.FLOAT,
+        packed
+      );
     },
     setLitLinks(links) {
       litCount = links.length;
-      gl.bindVertexArray(null);
+      gl.bindVertexArray(litArray);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, litIndex);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, links, gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(null);
     },
     draw(frame) {
       gl.viewport(0, 0, canvas.width, canvas.height);
@@ -293,26 +381,33 @@ export function createGraphRenderer(
         (-2 * frame.y) / frame.height
       ];
 
-      gl.useProgram(linkProgram);
-      gl.uniform4fv(linkUniforms.view, view);
-      gl.bindVertexArray(linkArray);
       if (linkCount) {
+        gl.useProgram(linkProgram);
+        gl.uniform4fv(linkUniforms.view, view);
         gl.uniform4fv(linkUniforms.colour, frame.link);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, linkIndex);
-        gl.drawElements(
+        gl.uniform1i(linkUniforms.every, Math.max(1, frame.linkEvery));
+        gl.uniform1i(linkUniforms.leaving, Math.max(1, frame.leavingEvery));
+        gl.uniform1i(linkUniforms.through, Math.max(1, frame.throughEvery));
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, positionTexture);
+        gl.uniform1i(linkUniforms.positions, 0);
+        gl.bindVertexArray(linkArray);
+        gl.drawArraysInstanced(
           gl.LINES,
-          Math.min(linkCount, frame.linkEnds),
-          gl.UNSIGNED_INT,
-          0
+          0,
+          2,
+          Math.min(linkCount, frame.linkEnds) / 2
         );
       }
       if (litCount) {
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, litIndex);
+        gl.useProgram(litProgram);
+        gl.uniform4fv(litUniforms.view, view);
+        gl.bindVertexArray(litArray);
         let from = 0;
         for (const run of frame.litLinks) {
           const ends = Math.min(run.ends, litCount - from);
           if (ends <= 0) continue;
-          gl.uniform4fv(linkUniforms.colour, run.colour);
+          gl.uniform4fv(litUniforms.colour, run.colour);
           gl.drawElements(gl.LINES, ends, gl.UNSIGNED_INT, from * 4);
           from += ends;
         }

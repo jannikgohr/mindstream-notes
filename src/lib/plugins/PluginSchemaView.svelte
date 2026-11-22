@@ -67,7 +67,9 @@
   function enqueue(task: () => Promise<void>) {
     queue = queue.then(task).catch((err) => {
       console.error('[plugins] sidebar view failed', pluginId, err);
-      failure = err instanceof Error ? err.message : String(err);
+      // A failed command arrives as `{ code, message }`, not as an Error.
+      const message = (err as { message?: unknown } | null)?.message;
+      failure = typeof message === 'string' ? message : String(err);
     });
   }
 

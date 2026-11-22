@@ -8,6 +8,10 @@
   "entry": "plugin.wasm",
   "descriptionKey": "plugin.description",
   "icon": "icons/graph.svg",
+  "limits": {
+    "memoryBytes": 134217728,
+    "timeoutMs": 5000
+  },
   "permissions": ["notes.read"],
   "contributes": {
     "documentation": [
