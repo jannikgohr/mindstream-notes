@@ -388,15 +388,18 @@
     colour = Int8Array.from(graph.nodes, (g) =>
       g.group === undefined ? MUTED : groupColour(g.group)
     );
+    // One slot per colour, counting the muted one, and per disc or ring.
+    const grouped: number[][] = [];
+    for (let i = 0; i < n; i++)
+      (grouped[2 * (colour[i] - MUTED) + other[i]] ??= []).push(i);
     buckets = [];
-    for (let c = MUTED; c < GROUP_COLOURS.length; c++) {
-      for (const ring of [false, true]) {
-        const members = Uint32Array.from(nextIds.keys()).filter(
-          (i) => colour[i] === c && (other[i] === 1) === ring
-        );
-        if (members.length) buckets.push({ colour: c, ring, nodes: members });
-      }
-    }
+    grouped.forEach((members, slot) => {
+      buckets.push({
+        colour: (slot >> 1) + MUTED,
+        ring: slot % 2 === 1,
+        nodes: Uint32Array.from(members)
+      });
+    });
     if (same && sameForces && node.focus === fittedFocus) {
       showHover();
       schedule();
