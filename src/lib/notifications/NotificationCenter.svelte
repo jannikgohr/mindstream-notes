@@ -11,7 +11,8 @@
   import {
     notificationState,
     scanForShareInviteNotifications,
-    scanForUpdateNotifications
+    scanForUpdateNotifications,
+    UPDATE_RESCAN_INTERVAL_MS
   } from './store.svelte';
   import LazyNotificationWidget from './LazyNotificationWidget.svelte';
 
@@ -85,6 +86,10 @@
 
   onMount(() => {
     void scanForUpdateNotifications();
+    const updateRescan = setInterval(
+      () => void scanForUpdateNotifications(true),
+      UPDATE_RESCAN_INTERVAL_MS
+    );
     void scanForShareInviteNotifications();
     // The server says when an invitation arrives or goes away, so the list
     // does not wait for a restart.
@@ -96,6 +101,7 @@
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     document.addEventListener('keydown', handleKeydown);
     return () => {
+      clearInterval(updateRescan);
       void unlistenInvitations?.then((unlisten) => unlisten());
       document.removeEventListener(
         'pointerdown',
