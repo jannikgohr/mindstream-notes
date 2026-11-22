@@ -131,6 +131,26 @@ test.describe('plugin framework — bundled Templates plugin', () => {
     ).toBeFocused();
   });
 
+  test('a hotkeys link opens Hotkeys even when a search hides it', async ({
+    page
+  }) => {
+    await boot(page);
+    const dialog = await openPluginsCategory(page);
+    const search = dialog.getByPlaceholder('Search settings…');
+    // Matches only the Templates folder setting, so the rail lists Plugins
+    // alone while the overview still offers its hotkeys links.
+    await search.fill('Template folder');
+
+    await dialog
+      .getByRole('button', { name: 'Plugin hotkeys' })
+      .first()
+      .click();
+    await expect(
+      dialog.getByRole('region', { name: 'Hotkeys', exact: true })
+    ).toBeFocused();
+    await expect(search).toHaveValue('');
+  });
+
   test('toggling the plugin adds/removes its toolbar contribution', async ({
     page
   }) => {

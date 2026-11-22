@@ -96,6 +96,8 @@
   $effect(() => {
     const requested = settingsDialog.requestedCategory;
     if (requested) {
+      // A search would hide the requested category behind the first match.
+      query = '';
       selectCategory(requested);
       settingsDialog.requestedCategory = null;
       deepLinked = true;
@@ -400,6 +402,7 @@
                   focusPane();
                 }}
                 onOpenHotkeys={() => {
+                  query = '';
                   selectCategory('hotkeys');
                   focusPane();
                 }}
