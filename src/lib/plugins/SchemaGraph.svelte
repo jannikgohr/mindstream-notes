@@ -269,13 +269,17 @@
     batchMs = stream ? Math.max(now - arrived, 8) : 0;
     arrived = now;
     glided = false;
+    const grew = positions.active !== active;
     active = positions.active;
     toX = positions.x;
     toY = positions.y;
-    if (renderer && sceneStale) {
+    if (sceneStale) {
       showHover();
-      renderer.setScene({ links: pairs, radius, styles: nodeStyles() });
+      renderer?.setScene({ links: pairs, radius, styles: nodeStyles() });
       sceneStale = false;
+      showHover();
+    } else if (grew && hovered >= 0) {
+      // More of the hovered note's links have both ends in the layout now.
       showHover();
     }
     schedule();
@@ -377,6 +381,22 @@
     };
     const sameForces = JSON.stringify(forces) === sentForces;
     sentForces = JSON.stringify(forces);
+    // What a node looks like can change while the nodes and links stay.
+    other = Uint8Array.from(graph.nodes, (g) =>
+      g.label === undefined ? 0 : 1
+    );
+    colour = Int8Array.from(graph.nodes, (g) =>
+      g.group === undefined ? MUTED : groupColour(g.group)
+    );
+    buckets = [];
+    for (let c = MUTED; c < GROUP_COLOURS.length; c++) {
+      for (const ring of [false, true]) {
+        const members = Uint32Array.from(nextIds.keys()).filter(
+          (i) => colour[i] === c && (other[i] === 1) === ring
+        );
+        if (members.length) buckets.push({ colour: c, ring, nodes: members });
+      }
+    }
     if (same && sameForces && node.focus === fittedFocus) {
       showHover();
       schedule();
@@ -386,12 +406,6 @@
 
     ids = nextIds;
     indexOf = nextIndex;
-    other = Uint8Array.from(graph.nodes, (g) =>
-      g.label === undefined ? 0 : 1
-    );
-    colour = Int8Array.from(graph.nodes, (g) =>
-      g.group === undefined ? MUTED : groupColour(g.group)
-    );
     radius = Float32Array.from(
       ids,
       (_, i) => 3 + Math.min(Math.sqrt(offset[i + 1] - offset[i]) * 1.5, 9)
@@ -419,15 +433,6 @@
       }
     });
     pairs = nextPairs;
-    buckets = [];
-    for (let c = MUTED; c < GROUP_COLOURS.length; c++) {
-      for (const ring of [false, true]) {
-        const members = Uint32Array.from(ids.keys()).filter(
-          (i) => colour[i] === c && (other[i] === 1) === ring
-        );
-        if (members.length) buckets.push({ colour: c, ring, nodes: members });
-      }
-    }
     byRadius = Uint32Array.from(ids.keys()).sort(
       (a, b) => radius[b] - radius[a]
     );

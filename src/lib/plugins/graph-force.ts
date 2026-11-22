@@ -337,8 +337,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   }
 
   // Nodes by grid cell, each cell as wide as the widest pair that can touch.
-  // Cells hash into a table, so two cells can share a slot: that only adds
-  // nodes too far apart to touch, which the distance check drops.
+  // Cells hash into a table, so two cells can share a slot, and a node is
+  // only taken from a slot if it lies in the cell being looked at.
   let slots = 16;
   while (slots < 2 * n) slots *= 2;
   const gridHead = new Int32Array(options.collide ? slots : 0);
@@ -373,10 +373,17 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
           const gy = cy + (c === 0 ? 0 : c === 4 ? 1 : c - 2);
           for (let j = gridHead[slot(gx, gy)]; j >= 0; j = gridNext[j]) {
             if (c === 0 && j <= i) continue;
+            const xj = s[4 * j] + s[4 * j + 2];
+            const yj = s[4 * j + 1] + s[4 * j + 3];
+            if (
+              Math.floor(xj / gridSize) !== gx ||
+              Math.floor(yj / gridSize) !== gy
+            )
+              continue;
             const rj = radius[j] + COLLIDE_PAD;
             const r = ri + rj;
-            let dx = xi - s[4 * j] - s[4 * j + 2];
-            let dy = yi - s[4 * j + 1] - s[4 * j + 3];
+            let dx = xi - xj;
+            let dy = yi - yj;
             let d2 = dx * dx + dy * dy;
             if (d2 >= r * r) continue;
             if (dx === 0) d2 += (dx = jiggle()) * dx;

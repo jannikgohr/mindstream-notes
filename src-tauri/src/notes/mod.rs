@@ -43,12 +43,20 @@ pub fn purge(conn: &Connection, id: &str) -> AppResult<()> {
 
 // ---------- Tauri commands ----------
 
+/// Reads every Markdown body, so it runs off the main thread: a vault of
+/// tens of thousands of notes would stall the window for the length of it.
 #[tauri::command]
-pub fn list_note_links(
-    db: tauri::State<'_, Db>,
+pub async fn list_note_links<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
 ) -> CommandResult<Vec<mindstream_storage_core::note_links::NoteLinks>> {
-    db.with_conn(|c| mindstream_storage_core::note_links::list(c).map_err(Into::into))
-        .map_err(Into::into)
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<Db>()
+            .with_conn(|c| mindstream_storage_core::note_links::list(c).map_err(Into::into))
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| crate::error::CommandError::task(format!("Note link scan task: {e}")))?
 }
 
 #[tauri::command]

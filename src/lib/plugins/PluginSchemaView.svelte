@@ -111,6 +111,10 @@
       void note.parent_collection_id;
       void note.trashed;
     }
+    for (const folder of Object.values(tree.collectionsById)) {
+      void folder.name;
+      void folder.parent_collection_id;
+    }
     const sections = pluginById(pluginId)?.manifest.contributes.settings ?? [];
     for (const setting of sections.flatMap((s) => s.settings)) {
       void getSettingValue(`plugins.${pluginId}.${setting.id}`);
@@ -146,7 +150,10 @@
     <!-- A view that is one line of text has nothing else to show: it says
          so in the middle, like an empty list does. -->
     <p
-      class="m-auto max-w-56 px-2 py-6 text-center text-xs text-muted-foreground"
+      class="m-auto max-w-56 px-2 py-6 text-center text-xs {view.tone ===
+      'accent'
+        ? 'text-accent-brand'
+        : 'text-muted-foreground'}"
     >
       {viewText(pluginId, view.text)}
     </p>
