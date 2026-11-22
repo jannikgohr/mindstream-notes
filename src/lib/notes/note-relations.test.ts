@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NoteSummary } from '$lib/api';
 import {
   clearNoteRelationsCache,
+  loadNoteLinks,
   loadNoteRelations,
   noteLinkIds
 } from './note-relations';
@@ -81,5 +82,32 @@ describe('loadNoteRelations', () => {
     ).resolves.toEqual({ outgoing: [], backlinks: [] });
     expect(loader).toHaveBeenCalledOnce();
     expect(loader).toHaveBeenCalledWith('a');
+  });
+});
+
+describe('loadNoteLinks', () => {
+  it('reads a large vault’s links at once and reloads only notes changed since', async () => {
+    const notes = Array.from({ length: 30 }, (_, i) => summary(`n${i}`));
+    const lister = vi.fn(async () =>
+      notes.map((note, i) => ({
+        id: note.id,
+        modified: note.modified,
+        targets: [`n${(i + 1) % 30}`, 'gone']
+      }))
+    );
+    const loader = vi.fn(async () => ({ body: '[n5](mindstream://note/n5)' }));
+
+    const links = await loadNoteLinks(notes, loader, lister);
+    expect(links.get('n0')).toEqual(['n1']);
+    expect(lister).toHaveBeenCalledOnce();
+    expect(loader).not.toHaveBeenCalled();
+
+    notes[0] = { ...notes[0], modified: '2026-02-01T00:00:00Z' };
+    expect((await loadNoteLinks(notes, loader, lister)).get('n0')).toEqual([
+      'n5'
+    ]);
+    expect(lister).toHaveBeenCalledOnce();
+    expect(loader).toHaveBeenCalledOnce();
+    expect(loader).toHaveBeenCalledWith('n0');
   });
 });

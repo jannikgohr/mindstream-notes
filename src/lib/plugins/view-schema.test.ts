@@ -118,6 +118,58 @@ describe('parseViewNode', () => {
     });
   });
 
+  it('keeps a graph’s note IDs and groups, and clamps its depth', () => {
+    expect(
+      parseViewNode({
+        type: 'graph',
+        nodes: [
+          { id: 'a', group: 'Work' },
+          { id: 'b' },
+          { id: 'tag:x', label: '#x' },
+          { id: 3 },
+          'c'
+        ],
+        links: [['a', 'tag:x'], ['a'], 'b', ['b', 7]],
+        focus: 'a',
+        depth: 99,
+        orphans: false,
+        forces: { centre: 0.5, repel: 9, link: 'x', linkDistance: 1 },
+        directions: true,
+        action: { label: 'Back', on: { event: 'unfocus' } },
+        onSelect: 'open'
+      })
+    ).toEqual({
+      type: 'graph',
+      nodes: [
+        { id: 'a', group: 'Work' },
+        { id: 'b' },
+        { id: 'tag:x', label: '#x' }
+      ],
+      links: [['a', 'tag:x']],
+      focus: 'a',
+      depth: 5,
+      orphans: false,
+      forces: { centre: 0.5, repel: 2, link: undefined, linkDistance: 10 },
+      directions: true,
+      action: { label: 'Back', on: { event: 'unfocus' } },
+      onSelect: 'open'
+    });
+    expect(
+      parseViewNode({ type: 'graph', nodes: [], onSelect: 'open' })
+    ).toEqual({
+      type: 'graph',
+      nodes: [],
+      links: [],
+      focus: undefined,
+      depth: 1,
+      orphans: true,
+      forces: {},
+      directions: false,
+      onSelect: 'open'
+    });
+    expect(parseViewNode({ type: 'graph', nodes: [] })).toBeNull();
+  });
+
   it('refuses a calendar without a month or events, and trees nested too deep', () => {
     expect(
       parseViewNode({

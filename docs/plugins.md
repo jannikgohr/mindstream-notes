@@ -1,7 +1,8 @@
 # Plugins
 
 Plugins add features to Mindstream Notes: new kinds of note, export formats,
-toolbar buttons, and spelling and grammar checkers. Three come with the app,
+toolbar buttons, sidebar views, and spelling and grammar checkers. Five come
+with the app,
 and you can install others from a folder. To write your own, see
 [Writing plugins](plugin-development.md).
 
@@ -56,8 +57,22 @@ to approve it again, even when the files are identical.
 
 ## The plugins that come with the app
 
-The browser version has Journal, Templates and Typst. LanguageTool and plugins you
+The browser version has Graph, Journal, Templates and Typst. LanguageTool and plugins you
 install need the app.
+
+### Graph
+
+Draws your notes, their tags and the links between them as a graph, like
+Obsidian's graph view. **Open graph view**, from the command palette or the
+**Local graph** sidebar view, opens the whole vault as a tab. **Local graph**
+in the sidebar shows the open note and the notes near it. Click a note to open
+it, click a tag to see only its notes, drag to move notes or the view, and
+scroll to zoom. The button in the graph's corner opens its settings beside it:
+filters, colours, the forces of the layout, and presets to keep a set of them
+under a name.
+
+It can read the titles, tags and folders of your notes. The app finds the
+links itself, so the plugin never reads what your notes say.
 
 ### Journal
 

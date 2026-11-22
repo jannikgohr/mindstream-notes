@@ -49,11 +49,17 @@
      * drag. Cleared on change so the stored value takes over on release.
      */
     sliderPreview?: number | null;
+    /**
+     * For a narrow panel: the control goes under its label, as on a phone,
+     * and the description becomes the label's tooltip.
+     */
+    compact?: boolean;
   }
   let {
     setting,
     searchQuery = '',
     live = false,
+    compact = false,
     sliderPreview = $bindable<number | null>(null)
   }: Props = $props();
 
@@ -156,8 +162,11 @@
      goes under it at full width, so long names and descriptions keep the
      row instead of wrapping word by word. -->
 <div
-  class="grid grid-cols-[1fr_auto] items-start gap-x-4 gap-y-2 py-3 {setting.type !==
-  'toggle'
+  class="grid items-start gap-x-4 {compact
+    ? 'gap-y-1 py-2'
+    : 'gap-y-2 py-3'} {compact && setting.type !== 'toggle'
+    ? 'grid-cols-1'
+    : 'grid-cols-[1fr_auto]'} {setting.type !== 'toggle'
     ? 'max-sm:grid-cols-1'
     : ''}"
 >
@@ -168,7 +177,10 @@
     class:col-span-full={setting.type === 'custom' || setting.type === 'radio'}
   >
     <div class="flex items-center gap-2">
-      <span class="text-sm font-medium">{label}</span>
+      <span
+        class="text-sm font-medium"
+        title={compact ? description : undefined}>{label}</span
+      >
       {#if modified}
         <span
           class="inline-block size-1.5 rounded-full bg-primary"
@@ -177,7 +189,7 @@
         ></span>
       {/if}
     </div>
-    {#if description}
+    {#if description && !compact}
       <p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
     {/if}
 

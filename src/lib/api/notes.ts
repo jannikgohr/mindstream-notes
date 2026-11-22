@@ -204,6 +204,34 @@ export function loadNote(id: string): Promise<Note> {
   );
 }
 
+/** A Markdown note's links to other notes, as of its `modified`. */
+export interface NoteLinks {
+  id: string;
+  modified: string;
+  targets: string[];
+}
+
+/** The links of every Markdown note outside the trash, in one read. */
+export function listNoteLinks(): Promise<NoteLinks[]> {
+  return invokeOrFallback<NoteLinks[]>(
+    TauriCommandName.ListNoteLinks,
+    {},
+    () => mockApi.listNoteLinks(),
+    (value) => {
+      if (!Array.isArray(value))
+        throw new Error('list_note_links response must be an array');
+      return value.map((item) => {
+        const raw = assertRecord(item, 'note links');
+        return {
+          id: assertString(raw.id, 'note links.id'),
+          modified: assertString(raw.modified, 'note links.modified'),
+          targets: assertStringArray(raw.targets, 'note links.targets')
+        };
+      });
+    }
+  );
+}
+
 export function createNote(input: CreateNoteInput): Promise<Note> {
   assertCreateNoteInput(input);
   return invokeOrFallback<Note>(

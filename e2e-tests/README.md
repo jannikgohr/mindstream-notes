@@ -108,6 +108,24 @@ Etebase protocol, so it runs unchanged against any server that serves it. The
 header of [perf/backend-bench/run.mjs](perf/backend-bench/run.mjs) lists the
 flags and what the numbers do and don't cover.
 
+## Large-vault benchmark
+
+Imports a vault built from Simple English Wikipedia into the browser build and
+times what grows with the vault: the import, booting with it, search, opening
+a note, and both graph views, with frame times while the graph moves.
+
+```sh
+pnpm bench:vault                         # 20,000 articles, builds the app first
+pnpm bench:vault --articles 2000 --skip-build --url http://localhost:1420/
+pnpm bench:vault --json out.json --profile graph.cpuprofile
+```
+
+[perf/wikipedia/make-vault.mjs](perf/wikipedia/make-vault.mjs) downloads only
+as much of the dump as the article count needs and caches the vault under
+`~/.cache/mindstream-perf`. Run headless on a machine without a GPU, Chromium
+rasterises the canvas in software, so graph frame times there say more about
+the machine than the app; `--profile` separates the app's own time from it.
+
 ## Going deeper
 
 - **Why these tiers exist / what each proves** — [docs/internal/e2e/strategy.md](../docs/internal/e2e/strategy.md)

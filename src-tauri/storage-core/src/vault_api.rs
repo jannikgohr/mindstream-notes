@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
 use crate::{
-    assets, collections, content_stats, demo_notes, history, notes, search, signatures, tree_batch,
+    assets, collections, content_stats, demo_notes, history, note_links, notes, search, signatures,
+    tree_batch,
 };
 
 #[derive(Deserialize)]
@@ -53,6 +54,7 @@ pub enum VaultRequest {
     SearchNotes {
         query: String,
     },
+    ListNoteLinks {},
     NoteWordCount {
         note_id: String,
     },
@@ -170,6 +172,7 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
         }
         DeleteCollection { id } => result(collections::delete(conn, &id)?),
         SearchNotes { query } => result(search::search(conn, &query)?),
+        ListNoteLinks {} => result(note_links::list(conn)?),
         NoteWordCount { note_id } => result(content_stats::note_word_count_inner(conn, &note_id)?),
         MoveMany {
             items,
@@ -309,6 +312,45 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn note_links_come_from_markdown_notes_outside_the_trash() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        let mut create = |title: &str| {
+            let note = call(&mut conn, "create_note", json!({"input":{"title":title}})).unwrap();
+            note["id"].as_str().unwrap().to_string()
+        };
+        let (a, b, gone) = (create("A"), create("B"), create("Gone"));
+        for (id, body) in [
+            (&a, format!("[B](mindstream://note/{b})")),
+            (&gone, format!("[A](mindstream://note/{a})")),
+        ] {
+            call(
+                &mut conn,
+                "save_note",
+                json!({"input":{"id":id,"body":body}}),
+            )
+            .unwrap();
+        }
+        call(&mut conn, "trash_note", json!({"id":gone})).unwrap();
+        let links = call(&mut conn, "list_note_links", json!({})).unwrap();
+        let mut links: Vec<(String, Vec<String>)> = links
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| {
+                (
+                    l["id"].as_str().unwrap().into(),
+                    serde_json::from_value(l["targets"].clone()).unwrap(),
+                )
+            })
+            .collect();
+        links.sort();
+        let mut expected = vec![(a.clone(), vec![b.clone()]), (b, vec![])];
+        expected.sort();
+        assert_eq!(links, expected);
     }
 
     #[test]

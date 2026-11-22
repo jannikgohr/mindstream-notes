@@ -302,6 +302,166 @@ describe.each(['Rust', 'TypeScript'])(
   }
 );
 
+describe('Graph component', { timeout: 60_000 }, () => {
+  const notes = [
+    {
+      id: 'a',
+      title: 'Alpha',
+      folderPath: 'Work / Projects',
+      tags: ['z', 'b']
+    },
+    { id: 'b', title: 'Beta', folderPath: '', tags: ['b'] }
+  ];
+  const graph = (options: HostOptions = {}) =>
+    loadPlugin(component('graph'), {
+      permissions: ['notes.read'],
+      notes,
+      ...options
+    });
+  type Rendered = {
+    state: { focus?: string };
+    view: { children: Record<string, unknown>[] };
+  };
+
+  it('draws the whole vault in its tab: notes by top-level folder, and tags linked to their notes', async () => {
+    const plugin = await graph();
+    const tab = await plugin.call<Rendered>('renderTab', { state: null });
+    expect(tab.state).toEqual({});
+    expect(tab.view.children).toEqual([
+      {
+        type: 'graph',
+        nodes: [
+          { id: 'a', group: 'Work' },
+          { id: 'b' },
+          { id: 'tag:b', label: '#b' },
+          { id: 'tag:z', label: '#z' }
+        ],
+        links: [
+          ['a', 'tag:z'],
+          ['a', 'tag:b'],
+          ['b', 'tag:b']
+        ],
+        depth: 1,
+        orphans: true,
+        directions: true,
+        forces: { centre: 1, repel: 1, link: 1, linkDistance: 40 },
+        onSelect: 'open'
+      }
+    ]);
+
+    const plain = await graph({
+      settings: {
+        'color-by': 'tag',
+        tags: false,
+        orphans: false,
+        depth: 3,
+        directions: false,
+        'center-force': 50,
+        'repel-force': 200,
+        'link-force': 0,
+        'link-distance': 150
+      }
+    });
+    const [node] = (await plain.call<Rendered>('renderTab', { state: null }))
+      .view.children;
+    expect(node).toMatchObject({
+      nodes: [
+        { id: 'a', group: 'b' },
+        { id: 'b', group: 'b' }
+      ],
+      links: [],
+      depth: 3,
+      orphans: false,
+      directions: false,
+      forces: { centre: 0.5, repel: 2, link: 0, linkDistance: 60 }
+    });
+  });
+
+  it('shows only the notes the search finds, by title, folder or tag', async () => {
+    const shown = async (search: string, activeNoteId?: string) => {
+      const plugin = await graph({ settings: { search, tags: false } });
+      const view = activeNoteId
+        ? await plugin.call<Rendered>('render', { state: null, activeNoteId })
+        : await plugin.call<Rendered>('renderTab', { state: null });
+      const nodes = view.view.children[0].nodes as { id: string }[];
+      return nodes.map((node) => node.id);
+    };
+    expect(await shown(' ALPH ')).toEqual(['a']);
+    expect(await shown('projects')).toEqual(['a']);
+    expect(await shown('z')).toEqual(['a']);
+    expect(await shown('nothing')).toEqual([]);
+    // The note a local graph is drawn around shows whatever the search says.
+    expect(await shown('alpha', 'b')).toEqual(['a', 'b']);
+  });
+
+  it('follows the open note in the sidebar, and never shows the whole vault there', async () => {
+    const plugin = await graph();
+    // A state from when the sidebar could show the vault changes nothing.
+    const local = await plugin.call<Rendered>('render', {
+      state: { local: false },
+      activeNoteId: 'b'
+    });
+    expect(local.state).toEqual({});
+    expect(local.view.children).toMatchObject([{ type: 'graph', focus: 'b' }]);
+    // With no note open there is nothing to draw, and the vault isn't read.
+    const blind = await graph({ permissions: [] });
+    await expect(
+      blind.call('render', { state: null, activeNoteId: 'b' })
+    ).rejects.toThrow();
+    const none = await blind.call<Rendered>('render', { state: null });
+    expect(none.view).toMatchObject({
+      type: 'text',
+      text: { key: 'view.noActiveNote' }
+    });
+  });
+
+  it('narrows to a clicked tag, opens a clicked note and opens its tab', async () => {
+    const plugin = await graph();
+    const state = {};
+    const tagged = await plugin.call<Rendered>('onEvent', {
+      state,
+      event: 'open',
+      value: 'tag:b'
+    });
+    expect(tagged).toEqual({ state: { focus: 'tag:b' } });
+    const tab = await plugin.call<Rendered>('renderTab', {
+      state: tagged.state
+    });
+    expect(tab.view.children).toMatchObject([
+      {
+        focus: 'tag:b',
+        action: { label: { key: 'view.showVault' }, on: { event: 'unfocus' } }
+      }
+    ]);
+    const side = await plugin.call<Rendered>('render', {
+      state: tagged.state,
+      activeNoteId: 'b'
+    });
+    expect(side.view.children).toMatchObject([
+      { focus: 'tag:b', action: { label: { key: 'view.showLocal' } } }
+    ]);
+    expect(
+      await plugin.call('onEvent', { state: tagged.state, event: 'unfocus' })
+    ).toEqual({ state: {} });
+
+    expect(
+      await plugin.call('onEvent', { state, event: 'open', value: 'a' })
+    ).toEqual({
+      state,
+      effect: { effect: 'openNote', noteId: 'a', preview: true }
+    });
+    await expect(
+      plugin.call('onEvent', { state, event: 'open', value: 'gone' })
+    ).rejects.toThrow(/no such note/);
+
+    const opened = { effect: 'openTabView', viewId: 'graph' };
+    expect(
+      await plugin.call('onEvent', { state, event: 'open-graph' })
+    ).toEqual({ state, effect: opened });
+    expect(await plugin.call('openGraph')).toEqual(opened);
+  });
+});
+
 describe('Journal component', { timeout: 60_000 }, () => {
   const journal = (options: HostOptions = {}) =>
     loadPlugin(component('journal'), {
@@ -533,6 +693,7 @@ it('every shipped plugin uses v2 and LanguageTool stays declarative', async () =
     .map((entry) => entry.name)
     .sort();
   expect(directories).toEqual([
+    'graph',
     'journal',
     'languagetool',
     'templates',
