@@ -1185,7 +1185,6 @@
     "export.label.annotationsMarkdown": "Annotations as Markdown",
     "export.label.pngPages": "PNG pages",
     "export.image.tooManyPages": "Image export supports up to 1000 pages. Use PDF for larger documents.",
-    "export.zip.tooLarge": "The export is too large for a ZIP file.",
     "fileTree.fallback.note": "this note",
     "fileTree.fallback.folder": "this folder",
     "fileTree.fallback.noteTitle": "Untitled",

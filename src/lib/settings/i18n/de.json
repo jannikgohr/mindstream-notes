@@ -1185,7 +1185,6 @@
     "export.label.annotationsMarkdown": "Annotationen als Markdown",
     "export.label.pngPages": "PNG-Seiten",
     "export.image.tooManyPages": "Der Bildexport unterstützt bis zu 1000 Seiten. Exportiere größere Dokumente als PDF.",
-    "export.zip.tooLarge": "Der Export ist zu groß für eine ZIP-Datei.",
     "fileTree.fallback.note": "diese Notiz",
     "fileTree.fallback.folder": "dieser Ordner",
     "fileTree.fallback.noteTitle": "Ohne Titel",
