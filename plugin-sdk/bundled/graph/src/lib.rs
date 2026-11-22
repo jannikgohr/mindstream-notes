@@ -89,7 +89,10 @@ impl Graph<'_> {
         }
     }
 
-    fn render(&self, place: Place) -> Result<Value, String> {
+    /// The view as JSON text. A vault's nodes and links are written straight
+    /// into it: as a tree of values they are several times the size, and a
+    /// vault of tens of thousands of notes then outgrows the memory limit.
+    fn render(&self, place: Place) -> Result<String, String> {
         let local = place == Place::Sidebar;
         let focus = self.focus();
         // The sidebar draws around the open note or a clicked tag.
@@ -106,7 +109,8 @@ impl Graph<'_> {
                             "tone": "muted",
                             "text": { "key": "view.noActiveNote" },
                         },
-                    }))
+                    })
+                    .to_string())
                 }
             },
             (None, Place::Tab) => None,
@@ -120,33 +124,61 @@ impl Graph<'_> {
             .trim()
             .to_lowercase();
 
-        let mut nodes = Vec::with_capacity(all.len());
-        let mut links = Vec::new();
+        // The note a local graph is drawn around always shows.
+        let shown: Vec<&NoteMeta> = all
+            .iter()
+            .filter(|note| self.found(note, &search) || centre == Some(note.id.as_str()))
+            .collect();
+        let mut out = String::with_capacity(shown.len() * 128);
+        out.push_str(r#"{"state":"#);
+        out.push_str(&state(focus).to_string());
+        out.push_str(r#","view":{"type":"stack","children":[{"nodes":["#);
         let mut tag_names = BTreeSet::new();
-        for note in &all {
-            // The note a local graph is drawn around always shows.
-            if !self.found(note, &search) && centre != Some(note.id.as_str()) {
-                continue;
+        for (i, note) in shown.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
             }
-            nodes.push(match self.group(note) {
-                Some(group) => json!({ "id": note.id, "group": group }),
-                None => json!({ "id": note.id }),
-            });
+            out.push_str(r#"{"id":"#);
+            out.push_str(&quoted(&note.id));
+            if let Some(group) = self.group(note) {
+                out.push_str(r#","group":"#);
+                out.push_str(&quoted(&group));
+            }
+            out.push('}');
             if tags {
+                tag_names.extend(note.tags.iter().map(String::as_str));
+            }
+        }
+        // A tag comes from a shown note, so it always follows a node.
+        for tag in &tag_names {
+            out.push(',');
+            out.push_str(r#"{"id":"#);
+            out.push_str(&quoted(&format!("{TAG_PREFIX}{tag}")));
+            out.push_str(r#","label":"#);
+            out.push_str(&quoted(&format!("#{tag}")));
+            out.push('}');
+        }
+        out.push_str(r#"],"links":["#);
+        let mut first = true;
+        if tags {
+            for note in &shown {
                 for tag in &note.tags {
-                    links.push(json!([note.id, format!("{TAG_PREFIX}{tag}")]));
-                    tag_names.insert(tag.as_str());
+                    if !first {
+                        out.push(',');
+                    }
+                    first = false;
+                    out.push('[');
+                    out.push_str(&quoted(&note.id));
+                    out.push(',');
+                    out.push_str(&quoted(&format!("{TAG_PREFIX}{tag}")));
+                    out.push(']');
                 }
             }
         }
-        for tag in tag_names {
-            nodes.push(json!({ "id": format!("{TAG_PREFIX}{tag}"), "label": format!("#{tag}") }));
-        }
+        out.push_str("],");
 
         let mut graph = json!({
             "type": "graph",
-            "nodes": nodes,
-            "links": links,
             "depth": self.depth(),
             "orphans": self.setting("orphans").as_bool() != Some(false),
             "directions": self.setting("directions").as_bool() != Some(false),
@@ -169,10 +201,10 @@ impl Graph<'_> {
             });
         }
 
-        Ok(json!({
-            "state": state(focus),
-            "view": { "type": "stack", "children": [graph] },
-        }))
+        // The rest of the graph's fields follow its nodes and links.
+        out.push_str(&graph.to_string()[1..]);
+        out.push_str("]}}");
+        Ok(out)
     }
 
     fn on_event(&self) -> Result<Value, String> {
@@ -193,6 +225,11 @@ impl Graph<'_> {
     }
 }
 
+/// A string as JSON, quoted and escaped.
+fn quoted(text: &str) -> String {
+    Value::from(text).to_string()
+}
+
 fn state(focus: Option<&str>) -> Value {
     match focus {
         Some(focus) => json!({ "focus": focus }),
@@ -211,8 +248,8 @@ impl Guest for Plugin {
         let graph = Graph { input: &input };
         let output = match export.as_str() {
             "$exports" => json!(["render", "renderTab", "onEvent", "openGraph"]),
-            "render" => graph.render(Place::Sidebar)?,
-            "renderTab" => graph.render(Place::Tab)?,
+            "render" => return graph.render(Place::Sidebar),
+            "renderTab" => return graph.render(Place::Tab),
             "onEvent" => graph.on_event()?,
             "openGraph" => open_tab(),
             _ => return Err(format!("unknown export {export}")),

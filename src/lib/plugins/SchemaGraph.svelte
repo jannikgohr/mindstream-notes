@@ -130,6 +130,15 @@
   let arrived = 0;
   let batchMs = 16;
   let glided = true;
+  // A device can be too slow to draw every link of a big graph. After a run
+  // of slow frames while the picture moves, it draws fewer of them where
+  // that hides nothing: see `linkDetail`.
+  let heavy = false;
+  let slowFrames = 0;
+  let drawnAt = 0;
+  let touchedAt = 0;
+  // The area the nodes cover, for how far apart they are on screen.
+  let spread = 0;
   let pairs = new Uint32Array(0);
   // Indexes from the biggest node down, the order labels are drawn in.
   let byRadius = new Uint32Array(0);
@@ -272,16 +281,48 @@
     schedule();
   }
 
+  /**
+   * How many links to leave out on a device that can't draw them all. Out
+   * of every `every` links between two nodes on screen one is drawn, and so
+   * for `leaving` and the links with one end on screen, and for `through`
+   * and those that only cross it.
+   *
+   * Nothing is left out that could be followed by eye. While nodes are too
+   * close together to tell apart the links are a haze, and a sample of a
+   * haze reads the same. Once they are apart, every link between two nodes
+   * in view is drawn; one that runs off the screen can't be followed to its
+   * other end, so those stay sampled until few nodes fill the view. The
+   * hovered note's own links are always all drawn.
+   */
+  function linkDetail(): { every: number; leaving: number; through: number } {
+    if (!heavy) return { every: 1, leaving: 1, through: 1 };
+    const apart = camera.k * Math.sqrt(spread / Math.max(active, 1));
+    const every = apart >= 10 ? 1 : apart >= 5 ? 4 : 16;
+    return {
+      every,
+      leaving: apart >= 40 ? 1 : Math.max(every, 4),
+      through: 16
+    };
+  }
+
   /** Move what is drawn towards the latest positions; true while under way. */
   function glide(now: number): boolean {
     if (!toX || !toY || glided) return false;
     const t = batchMs ? Math.min((now - arrived) / batchMs, 1) : 1;
+    let [minX, minY, maxX, maxY] = [Infinity, Infinity, -Infinity, -Infinity];
     for (let i = 0; i < xs.length; i++) {
-      const [x, y] = [fromX[i], fromY[i]];
+      const x = fromX[i];
+      const y = fromY[i];
       const jump = t === 1 || i >= fromActive || Number.isNaN(x);
       xs[i] = jump ? toX[i] : x + (toX[i] - x) * t;
       ys[i] = jump ? toY[i] : y + (toY[i] - y) * t;
+      if (i >= active) continue;
+      if (xs[i] < minX) minX = xs[i];
+      if (xs[i] > maxX) maxX = xs[i];
+      if (ys[i] < minY) minY = ys[i];
+      if (ys[i] > maxY) maxY = ys[i];
     }
+    spread = maxX > minX ? (maxX - minX) * (maxY - minY) : 0;
     renderer?.setPositions(xs, ys);
     glided = t === 1;
     return !glided;
@@ -547,8 +588,17 @@
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    if (glide(performance.now())) schedule();
+    const now = performance.now();
+    const gliding = glide(now);
+    if (gliding) schedule();
     fit();
+    const moving = gliding || now - touchedAt < 200;
+    if (moving && now - drawnAt < 100) {
+      slowFrames = now - drawnAt > 24 ? slowFrames + 1 : 0;
+      if (slowFrames > 8) heavy = true;
+    }
+    drawnAt = now;
+    const detail = linkDetail();
     const css = getComputedStyle(canvas);
     const token = (name: string) => css.getPropertyValue(name).trim();
     const fills = GROUP_COLOURS.map((c) => token(`--named-${c}`));
@@ -561,7 +611,10 @@
     // Fainter the more links there are, or a dense graph is one grey slab.
     const linkAlpha =
       (hovered >= 0 ? 0.15 : 0.6) *
-      Math.min(1, Math.sqrt(20000 / Math.max(pairs.length / 2, 1)));
+      Math.min(
+        1,
+        Math.sqrt((20000 * detail.every) / Math.max(pairs.length / 2, 1))
+      );
     if (renderer) {
       const palette = new Float32Array(PALETTE_SIZE * 4);
       [...fills, muted, accent].forEach((c, i) => palette.set(rgba(c), i * 4));
@@ -574,6 +627,9 @@
         k,
         nodes: active,
         linkEnds: 2 * linksAmong[active],
+        linkEvery: detail.every,
+        leavingEvery: detail.leaving,
+        throughEvery: detail.through,
         palette,
         link: rgba(token('--border-strong'), linkAlpha),
         litLinks: litLinks.map((run, relation) => ({
@@ -618,7 +674,8 @@
       ctx.strokeStyle = token('--border-strong');
       ctx.globalAlpha = linkAlpha;
       ctx.beginPath();
-      for (let p = 0; p < 2 * linksAmong[active]; p += 2) {
+      const step = 2 * detail.every;
+      for (let p = 0; p < 2 * linksAmong[active]; p += step) {
         const a = pairs[p];
         const b = pairs[p + 1];
         if (Number.isNaN(xs[a]) || Number.isNaN(xs[b])) continue;
@@ -847,6 +904,7 @@
       camera.y += next.sy - pinch.sy;
       zoomAt(next.sx, next.sy, (camera.k * next.gap) / pinch.gap);
       pinch = next;
+      touchedAt = performance.now();
       schedule();
       return;
     }
@@ -870,6 +928,7 @@
       drag.target = -1;
     drag.moved = true;
     autoFit = false;
+    touchedAt = performance.now();
     if (drag.target < 0) {
       camera.x = drag.camX + dx;
       camera.y = drag.camY + dy;
@@ -921,6 +980,7 @@
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : 1);
     const rate = event.ctrlKey ? 0.01 : 0.002;
     autoFit = false;
+    touchedAt = performance.now();
     zoomAt(sx, sy, camera.k * Math.exp(-delta * rate));
     schedule();
   }
