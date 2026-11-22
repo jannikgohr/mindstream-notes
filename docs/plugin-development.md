@@ -630,6 +630,11 @@ navigation. It needs a scripted runtime.
 }]
 ```
 
+An action is a button in the row above the navigation while the view is
+selected. With `"inline": true` it is an icon at the end of the view's own
+navigation entry instead. Either way a click calls `onEvent` with the action's
+`id` as the event.
+
 With `"type": "schema"` the app calls `render({ ...ctx, state })` and draws the
 `view` it returns from its own components, so the view follows the theme and the
 app's keyboard and screen-reader behaviour. The plugin keeps no memory between

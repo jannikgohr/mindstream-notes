@@ -140,7 +140,15 @@
   {#if failure}
     <p class="px-1 py-3 text-xs text-destructive">{failure}</p>
   {/if}
-  {#if view}{@render node(view)}{/if}
+  {#if view?.type === 'text'}
+    <!-- A view that is one line of text has nothing else to show: it says
+         so in the middle, like an empty list does. -->
+    <p
+      class="m-auto max-w-56 px-2 py-6 text-center text-xs text-muted-foreground"
+    >
+      {viewText(pluginId, view.text)}
+    </p>
+  {:else if view}{@render node(view)}{/if}
 </div>
 
 {#snippet node(n: ViewNode)}

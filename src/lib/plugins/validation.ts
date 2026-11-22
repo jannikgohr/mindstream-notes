@@ -1332,6 +1332,12 @@ function validateSidebarView(
     assertSlug(pluginId, action?.id, `${path}.actions[${i}].id`);
     assertI18nKey(pluginId, action.labelKey, `${path}.actions[${i}].labelKey`);
     assertSvgPath(pluginId, action.icon, `${path}.actions[${i}].icon`);
+    if (action.inline !== undefined && typeof action.inline !== 'boolean') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.actions[${i}].inline must be true or false`
+      );
+    }
     if (seen.has(action.id)) {
       throw new PluginValidationError(
         pluginId,
