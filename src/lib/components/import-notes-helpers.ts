@@ -9,6 +9,7 @@
 
 import type { Collection, ImportSourceKind } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 /** A folder the user can import into, ready to render in a flat list. */
 export interface FolderOption {
@@ -65,7 +66,7 @@ export function uniqueFolderName(
   collectionsById: Record<string, Collection>,
   destination: string | null
 ): string {
-  const base = suggested.trim() || 'Imported notes';
+  const base = suggested.trim() || tUi('data.importNotes.defaultFolder');
   const taken = new Set(
     Object.values(collectionsById)
       .filter((c) => (c.parent_collection_id ?? null) === destination)

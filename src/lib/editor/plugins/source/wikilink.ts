@@ -26,6 +26,7 @@ import type { WikilinkBridge } from '../wikilink-bridge.svelte';
 import { inCodeContext } from './code-context';
 import { escapeLinkText } from './link-text';
 import { sourceTypeahead } from './typeahead';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 /** Closes the menu on a runaway "I forgot to close my brackets". */
 const MAX_QUERY_LEN = 80;
@@ -99,7 +100,9 @@ export function findWikilinkReplaceTo(
 /** The markdown a committed note becomes — the same ID-backed link the prose
  *  plugin builds as a mark, spelled out. */
 function renderNoteLink(note: { id: string; title: string }): string {
-  const label = escapeLinkText(note.title.trim() || 'Untitled');
+  const label = escapeLinkText(
+    note.title.trim() || tUi('fileTree.fallback.noteTitle')
+  );
   return `[${label}](${noteHref(note.id)})`;
 }
 

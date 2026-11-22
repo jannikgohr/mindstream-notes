@@ -9,6 +9,7 @@
  */
 
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 /**
  * fflate writes no ZIP64 records, so sizes and offsets have to fit in 32 bits.
@@ -49,7 +50,7 @@ function createZipWriter(onChunk: (chunk: Uint8Array) => void) {
         entries + 1 > MAX_ZIP_ENTRIES ||
         total + bytes.length > MAX_ZIP_BYTES
       ) {
-        throw new Error('The export is too large for a zip file');
+        throw new Error(tUi('export.zip.tooLarge'));
       }
       entries += 1;
       total += bytes.length;

@@ -143,14 +143,16 @@
       <div
         class="flex h-9 items-center justify-between border-b border-border px-3"
       >
-        <div class="text-xs font-medium text-muted-foreground">Signature</div>
+        <div class="text-xs font-medium text-muted-foreground">
+          {tUi('pdf.signature.heading')}
+        </div>
         <Button
           variant="ghost"
           size="sm"
           class="h-7 px-2 text-xs"
           onclick={onCancel}
         >
-          Cancel
+          {tUi('pdf.signature.cancel')}
         </Button>
       </div>
 
@@ -180,7 +182,7 @@
             onclick={clearPad}
             disabled={strokes.length === 0 && !draft}
           >
-            Clear
+            {tUi('pdf.signature.clear')}
           </Button>
           {#if onImport}
             <Button
@@ -199,7 +201,7 @@
           onclick={saveFromPad}
           disabled={strokes.length === 0}
         >
-          Save
+          {tUi('pdf.signature.save')}
         </Button>
       </div>
     </div>

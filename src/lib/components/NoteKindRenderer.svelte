@@ -3,6 +3,7 @@
   import { loadNoteKindComponent } from './note-editor/lazy-components';
   import { tree } from '$lib/stores/tree.svelte';
   import { pluginById, pluginNoteKind } from '$lib/plugins/registry.svelte';
+  import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
     noteId: string;
@@ -59,7 +60,7 @@
       .catch((err) => {
         if (destroyed || token !== loadToken) return;
         console.error('[NoteKindRenderer] failed to load editor', err);
-        loadError = 'Unable to load this editor.';
+        loadError = tUi('editor.kind.loadFailed');
       });
   });
 
@@ -81,6 +82,6 @@
   <div
     class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
   >
-    Loading editor...
+    {tUi('editor.kind.loading')}
   </div>
 {/if}

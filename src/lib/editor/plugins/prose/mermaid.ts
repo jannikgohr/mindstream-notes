@@ -39,6 +39,7 @@ import {
 } from '@milkdown/kit/preset/commonmark';
 import { systemPrefersMode, userPrefersMode } from 'mode-watcher';
 import { get } from 'svelte/store';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 /** Canonical language string we recognise in the code-fence `language`
  *  attr. Used for both the slash-menu insertion and the renderPreview
@@ -165,7 +166,7 @@ export function renderMermaidPreview(
         const { svg } = await mermaid.render(makeRenderId(), content);
         const img = new Image();
         img.src = svgToDataUrl(svg);
-        img.alt = 'Mermaid diagram';
+        img.alt = tUi('editor.menu.mermaid');
         img.className = 'mermaid-preview-img';
         applyPreview(img);
       } catch (err) {
@@ -177,7 +178,7 @@ export function renderMermaidPreview(
     })
     .catch((err) => {
       console.error('[mermaid] dynamic import failed', err);
-      applyMermaidError(applyPreview, 'Failed to load Mermaid');
+      applyMermaidError(applyPreview, tUi('editor.mermaid.loadFailed'));
     });
 
   return placeholder;

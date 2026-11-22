@@ -1,3 +1,4 @@
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 /**
  * The addresses derived from the single `account.serverUrl` the user
  * configures, plus the normalisation pass we run on raw user input before
@@ -67,17 +68,19 @@ export function normalizeServerUrl(raw: string): ServerUrlValidation {
   try {
     parsed = new URL(withScheme);
   } catch {
-    return { url: '', error: 'Not a valid URL' };
+    return { url: '', error: tUi('account.server.invalidUrl') };
   }
 
   if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     return {
       url: '',
-      error: `URL must use http:// or https:// (got ${parsed.protocol})`
+      error: tUiFormat('account.server.badScheme', {
+        scheme: parsed.protocol
+      })
     };
   }
   if (!parsed.hostname) {
-    return { url: '', error: 'URL must include a hostname' };
+    return { url: '', error: tUi('account.server.noHost') };
   }
 
   parsed.search = '';

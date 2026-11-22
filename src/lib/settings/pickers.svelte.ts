@@ -16,6 +16,7 @@ import { ancestorIsTrash } from '$lib/editor/trash';
 import { folderPathLabel } from '$lib/notes/folder-path';
 import { noteIsUnderTrash } from '$lib/stores/note-source.svelte';
 import type { Setting } from './types';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 export interface PickerItem {
   value: string;
@@ -74,7 +75,7 @@ export function noteOptions(): PickerItem[] {
   return Object.values(tree.notesById)
     .filter((note) => !noteIsUnderTrash(note, byId))
     .map((note) => {
-      const title = note.title.trim() || 'Untitled';
+      const title = note.title.trim() || tUi('fileTree.fallback.noteTitle');
       const folder = note.parent_collection_id
         ? folderPathLabel(note.parent_collection_id, byId)
         : '';

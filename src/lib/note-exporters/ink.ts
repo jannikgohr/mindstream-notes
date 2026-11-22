@@ -3,6 +3,7 @@ import { buildInkPdf } from '$lib/notes-export/ink-pdf';
 import { sanitizePdfFilename } from '$lib/pdf/filename';
 import type { NoteExporter } from './types';
 import { bundleExportFiles, saveExportFile } from './files';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 export async function exportInkNotePdf(noteId: string): Promise<void> {
   const note = await loadNote(noteId);
@@ -21,7 +22,7 @@ export async function exportInkNotePdf(noteId: string): Promise<void> {
       name: `${sanitizePdfFilename(note.title)}.pdf`,
       bytes: pdfBytes
     },
-    'Save handwritten note as PDF'
+    tUi('export.save.inkPdf')
   );
 }
 
@@ -35,7 +36,9 @@ export const inkExporters: NoteExporter[] = [
   {
     id: 'ink.png',
     noteKind: 'ink',
-    label: 'PNG pages',
+    get label() {
+      return tUi('export.label.pngPages');
+    },
     run: async (noteId) => {
       const note = await loadNote(noteId);
       if (note.note_kind !== 'ink')

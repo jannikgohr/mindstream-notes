@@ -82,6 +82,7 @@
     allowEmbedHost,
     allowedEmbedHosts
   } from '$lib/freeform/embed-allowed-hosts';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
   interface Props {
     noteId: string;
@@ -642,9 +643,7 @@
       role="status"
     >
       <Trash2 class="size-3.5 shrink-0" aria-hidden="true" />
-      <span
-        >This note is in the trash and is read-only. Restore it to edit.</span
-      >
+      <span>{tUi('editor.trash.banner')}</span>
     </div>
   {/if}
   <!--
@@ -658,13 +657,13 @@
       <p
         class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
       >
-        Loading drawing…
+        {tUi('editor.freeform.loading')}
       </p>
     {:else if loadError}
       <p
         class="absolute inset-0 flex items-center justify-center px-2 text-sm text-destructive"
       >
-        Couldn't load drawing: {loadError}
+        {tUiFormat('editor.freeform.loadFailed', { error: loadError })}
       </p>
     {/if}
     <!--

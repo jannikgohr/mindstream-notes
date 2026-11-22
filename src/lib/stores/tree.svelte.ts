@@ -31,6 +31,7 @@ import {
 } from '$lib/storage/vault-access.svelte';
 import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import { ancestorIsTrash } from '$lib/editor/trash';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 interface TreeState {
   tree: TreeNode[];
@@ -145,7 +146,9 @@ export async function importPdfIn(
   file: File
 ): Promise<string> {
   const raw = new Uint8Array(await file.arrayBuffer());
-  const title = file.name.replace(/\.pdf$/i, '').trim() || 'Untitled PDF';
+  const title =
+    file.name.replace(/\.pdf$/i, '').trim() ||
+    tUi('fileTree.fallback.pdfTitle');
   const note = await api.importPdfNoteBytes({
     parent_collection_id: parentId,
     title,

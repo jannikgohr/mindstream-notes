@@ -1,5 +1,6 @@
 import { saveFileExport } from '$lib/api/file-export';
 import { sanitizeName } from '$lib/notes-export/sanitize';
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
 export const EXPORT_FORMATS = {
   pdf: { mime: 'application/pdf', label: 'PDF' },
@@ -18,8 +19,18 @@ export const EXPORT_FORMATS = {
   excalidraw: { mime: 'application/json', label: 'Excalidraw' },
   png: { mime: 'image/png', label: 'PNG' },
   svg: { mime: 'image/svg+xml', label: 'SVG' },
-  typ: { mime: 'text/plain', label: 'Typst source' },
-  zip: { mime: 'application/zip', label: 'ZIP archive' }
+  typ: {
+    mime: 'text/plain',
+    get label() {
+      return tUi('export.format.typst');
+    }
+  },
+  zip: {
+    mime: 'application/zip',
+    get label() {
+      return tUi('export.format.zip');
+    }
+  }
 } as const;
 
 export type ExportFormat = keyof typeof EXPORT_FORMATS;
@@ -53,7 +64,8 @@ export async function saveExportFile(
   const { mime, label } = EXPORT_FORMATS[file.format];
   return saveFileExport({
     suggestedName: file.name,
-    dialogTitle: dialogTitle ?? `Save ${label}`,
+    dialogTitle:
+      dialogTitle ?? tUiFormat('export.save.title', { format: label }),
     bytes: file.bytes,
     mime,
     filterName: label,
