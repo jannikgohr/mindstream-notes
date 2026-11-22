@@ -25,6 +25,7 @@
   import type { Collection } from '$lib/api';
   import { tree } from '$lib/stores/tree.svelte';
   import type { MobileBatchItem } from './state.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   export type MoveTarget =
     | {
@@ -249,7 +250,7 @@
             ? 'mobile.moveTo.collapseFolder'
             : 'mobile.moveTo.expandFolder'
         )}
-        title={tUi(args.open ? 'tags.collapse' : 'tags.expand')}
+        use:tooltip={tUi(args.open ? 'tags.collapse' : 'tags.expand')}
       >
         <ChevronRight
           class="size-4 transition-transform {args.open ? 'rotate-90' : ''}"

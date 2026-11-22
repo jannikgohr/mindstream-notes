@@ -16,6 +16,7 @@ import {
   type ExportFile
 } from './files';
 import type { NoteExporter } from './types';
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
 interface PluginExportFile {
   mime: string;
@@ -144,10 +145,7 @@ export async function runPluginNoteExporter(
     const pageCount = (
       await PDFDocument.load(base64ToBytes(source.dataBase64))
     ).getPageCount();
-    if (pageCount > 1000)
-      throw new Error(
-        'Image export supports up to 1000 pages. Use PDF for larger documents.'
-      );
+    if (pageCount > 1000) throw new Error(tUi('export.image.tooManyPages'));
     const files: ExportFile[] = [];
     for (let page = 1; page <= pageCount; page++) {
       const result = await runPluginScript(ref.pluginId, ref.exporter.export, {
@@ -166,7 +164,9 @@ export async function runPluginNoteExporter(
   await saveExportFile(
     file,
     file.format === 'pdf'
-      ? `Save ${resolvePluginString(ref.pluginId, ref.exporter.labelKey)}`
+      ? tUiFormat('export.save.title', {
+          format: resolvePluginString(ref.pluginId, ref.exporter.labelKey)
+        })
       : undefined
   );
 }

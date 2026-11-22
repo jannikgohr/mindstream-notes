@@ -146,7 +146,7 @@ export async function exportAnnotatedPdfNote(noteId: string): Promise<void> {
       name: `${sanitizePdfFilename(note.title)}.pdf`,
       bytes: await exportAnnotatedPdf(pdfBytes, annotations)
     },
-    'Save annotated PDF'
+    tUi('export.save.annotatedPdf')
   );
 }
 
@@ -168,7 +168,7 @@ export async function exportPrintReadyPdfNote(noteId: string): Promise<void> {
       name: `${sanitizePdfFilename(note.title)} (print).pdf`,
       bytes
     },
-    'Save print-ready PDF'
+    tUi('export.save.printPdf')
   );
   if (!saved) return;
   for (const warning of warnings) {
@@ -180,25 +180,33 @@ export const pdfExporters: NoteExporter[] = [
   {
     id: 'pdf.annotated',
     noteKind: 'pdf',
-    label: 'Annotated PDF',
+    get label() {
+      return tUi('export.label.annotatedPdf');
+    },
     run: exportAnnotatedPdfNote
   },
   {
     id: 'pdf.print-ready',
     noteKind: 'pdf',
-    label: 'Print-ready PDF',
+    get label() {
+      return tUi('export.label.printPdf');
+    },
     run: exportPrintReadyPdfNote
   },
   {
     id: 'pdf.original',
     noteKind: 'pdf',
-    label: 'Original PDF',
+    get label() {
+      return tUi('export.label.originalPdf');
+    },
     run: exportOriginalPdfNote
   },
   {
     id: 'pdf.markdown',
     noteKind: 'pdf',
-    label: 'Annotations as Markdown',
+    get label() {
+      return tUi('export.label.annotationsMarkdown');
+    },
     run: exportPdfAnnotationsMarkdown
   }
 ];
@@ -211,7 +219,7 @@ export async function exportOriginalPdfNote(noteId: string): Promise<void> {
       name: `${sanitizePdfFilename(note.title)} (original).pdf`,
       bytes: await fetchAssetBytes(assetId, 'application/pdf')
     },
-    'Save original PDF'
+    tUi('export.save.originalPdf')
   );
 }
 

@@ -12,6 +12,7 @@
     sanitizeKanbanDescriptionHtml
   } from '$lib/kanban/description-markdown';
   import { isMobile } from '$lib/platform';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     card: KanbanCard & {
@@ -201,7 +202,10 @@
       class="kanban-card-linked-note"
       class:kanban-card-linked-note-missing={!linkedNote || linkedNote.trashed}
       aria-label={tUi('editor.kanban.openLinkedNote')}
-      title={linkedNote?.title ?? tUi('editor.kanban.missingLinkedNote')}
+      title={linkedNote && !linkedNote.trashed
+        ? undefined
+        : (linkedNote?.title ?? tUi('editor.kanban.missingLinkedNote'))}
+      use:tooltip={linkedNote && !linkedNote.trashed ? linkedNote.title : null}
       onpointerdown={openLinkedNote}
       onclick={openLinkedNote}
       disabled={!linkedNote || linkedNote.trashed}
@@ -248,7 +252,12 @@
       aria-label={tUi('editor.kanban.cardAssignees')}
     >
       {#each users.slice(0, 4) as user (user.id)}
-        <span class="kanban-card-user" title={user.label}>
+        <span
+          class="kanban-card-user"
+          role="img"
+          aria-label={user.label}
+          use:tooltip={user.label}
+        >
           {user.label.slice(0, 1).toUpperCase()}
         </span>
       {/each}

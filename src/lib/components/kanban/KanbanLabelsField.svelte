@@ -2,6 +2,7 @@
   import { Plus, X } from '@lucide/svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { rankSubstringMatches } from '$lib/search/substring-rank';
+  import { tooltip } from '$lib/actions/tooltip';
 
   export interface KanbanLabelOption {
     id: string;
@@ -180,7 +181,7 @@
               '{label}',
               label.label
             )}
-            title={tUi('editor.kanban.removeLabel').replace(
+            use:tooltip={tUi('editor.kanban.removeLabel').replace(
               '{label}',
               label.label
             )}
@@ -235,7 +236,7 @@
                   '{label}',
                   option.label
                 )}
-                title={tUi('editor.kanban.deleteUnusedLabel').replace(
+                use:tooltip={tUi('editor.kanban.deleteUnusedLabel').replace(
                   '{label}',
                   option.label
                 )}

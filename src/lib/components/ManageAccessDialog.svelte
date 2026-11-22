@@ -26,6 +26,7 @@
   import ShareLinksSection from './ShareLinksSection.svelte';
   import { pushToast } from './toast.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { tooltip } from '$lib/actions/tooltip';
 
   let members = $state<CollectionMember[]>([]);
   let shareState = $state<CollectionShareState | null>(null);
@@ -290,7 +291,7 @@
                     class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                     disabled={busy === member.username}
                     aria-label={tUi('sharing.access.remove')}
-                    title={tUi('sharing.access.remove')}
+                    use:tooltip={tUi('sharing.access.remove')}
                     onclick={() => void remove(member.username)}
                   >
                     <UserMinus class="size-3.5" />

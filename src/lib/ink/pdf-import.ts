@@ -15,6 +15,7 @@ import { INK_PAGES, INK_META, INK_SCHEMA } from './page-document';
 import { DEFAULT_PAGE, type InkPage } from './page';
 import type { PdfAnnotation } from '$lib/pdf/types';
 import { pageOffset } from './page-document';
+import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
 function needsSnapshot(
   state: number[],
@@ -41,12 +42,11 @@ export function parsePageRange(value: string, count: number): number[] {
   const result = new Set<number>();
   for (const part of value.split(',')) {
     const match = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/.exec(part);
-    if (!match)
-      throw new Error('Use page numbers or ranges, for example 1, 3-5.');
+    if (!match) throw new Error(tUi('ink.import.rangeFormat'));
     const start = Number(match[1]),
       end = Number(match[2] ?? match[1]);
     if (start < 1 || end < start || end > count)
-      throw new Error(`Pages must be between 1 and ${count}.`);
+      throw new Error(tUiFormat('ink.import.rangeBounds', { count }));
     for (let i = start; i <= end; i++) result.add(i - 1);
   }
   return [...result];

@@ -72,6 +72,7 @@
     setSettingValue,
     settingsDialog
   } from '../store.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   type Mode = 'signin' | 'signup' | 'recover';
 
@@ -471,7 +472,7 @@
         </div>
         <div
           class="mt-0.5 truncate font-mono text-xs text-muted-foreground"
-          title={authSession.current.server_url}
+          use:tooltip={authSession.current.server_url}
         >
           {authSession.current.server_url}
         </div>
@@ -592,7 +593,7 @@
             <span class={FIELD_LABEL_CLASS}>{tUi('account.server.label')}</span>
             <div
               class="flex h-8 items-center rounded-md border border-input bg-background/40 px-2 font-mono text-xs text-muted-foreground"
-              title={tUi('account.managedHint')}
+              use:tooltip={tUi('account.managedHint')}
             >
               {tUiFormat('account.server.managed', { url: MANAGED_SERVER_URL })}
             </div>

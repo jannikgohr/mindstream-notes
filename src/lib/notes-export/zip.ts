@@ -6,6 +6,9 @@
  * Note titles become archive paths, and some of those notes can come from
  * other people through a shared folder, so a path that could leave the
  * extraction folder is refused here, as the native writer does on disk.
+ *
+ * The browser's storage worker packs backups with this module, so it must not
+ * import Svelte state such as the i18n store: runes don't exist in a worker.
  */
 
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';

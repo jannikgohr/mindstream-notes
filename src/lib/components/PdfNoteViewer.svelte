@@ -1238,7 +1238,7 @@
     } catch (err) {
       console.error('[PdfNoteViewer] export failed', err);
       await alert({
-        title: 'Annotated PDF export failed',
+        title: tUi('pdf.export.annotatedFailed'),
         message: toErrorMessage(err)
       });
     }
@@ -1971,7 +1971,7 @@
       class="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
     >
       <Loader2 class="size-4 animate-spin" aria-hidden="true" />
-      <span>Loading PDF…</span>
+      <span>{tUi('pdf.loading')}</span>
     </div>
   {:else if error}
     <div

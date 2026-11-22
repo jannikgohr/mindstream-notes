@@ -762,7 +762,7 @@
   async function renderNow() {
     const ref = contributionRef;
     if (!ref) {
-      renderError = 'No enabled plugin owns this note kind.';
+      renderError = tUi('editor.plugin.noOwner');
       previewText = '';
       diagnostics = [];
       return;
@@ -1156,7 +1156,7 @@ parentWindow.postMessage({ type: 'mindstream-plugin-preview-ready' }, '*');
       class="flex h-full items-center justify-center text-sm text-muted-foreground"
     >
       <Loader2 class="mr-2 size-4 animate-spin" />
-      Loading editor...
+      {tUi('editor.kind.loading')}
     </div>
   {:else if loadError}
     <div

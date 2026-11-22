@@ -15,6 +15,7 @@
    */
   import { ChevronRight } from '@lucide/svelte';
   import type { Collection } from '$lib/api';
+  import { tUi } from '$lib/settings/i18n.svelte';
 
   interface Props {
     path: Collection[];
@@ -47,7 +48,9 @@
 </script>
 
 {#if path.length === 0}
-  <div class="text-right text-muted-foreground">Root</div>
+  <div class="text-right text-muted-foreground">
+    {tUi('metadata.folder.root')}
+  </div>
 {:else}
   <div
     bind:this={containerEl}

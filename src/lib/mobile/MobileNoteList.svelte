@@ -67,6 +67,7 @@
     toggleMobileBatchItem,
     type MobileBatchItem
   } from './state.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     onOpenNote: (id: string) => void;
@@ -570,7 +571,7 @@
           class="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           onclick={clearMobileBatchSelection}
           aria-label={tUi('mobile.cancelSelection')}
-          title={tUi('mobile.cancel')}
+          use:tooltip={tUi('mobile.cancel')}
         >
           <X class="size-4" />
         </button>
@@ -585,7 +586,7 @@
           onclick={() => void startEmptyTrash()}
           disabled={trashRootEmpty || emptyTrashPending}
           aria-label={tUi('mobile.deleteAllTrash')}
-          title={tUi('mobile.deleteAllPermanently')}
+          use:tooltip={tUi('mobile.deleteAllPermanently')}
         >
           {#if emptyTrashPending}
             <Loader2 class="size-3.5 animate-spin" />
@@ -656,7 +657,9 @@
                     onclick={() => toggleFavourite(node.id)}
                     aria-pressed={fav}
                     aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
-                    title={tUi(fav ? 'favourite.remove' : 'favourite.add')}
+                    use:tooltip={tUi(
+                      fav ? 'favourite.remove' : 'favourite.add'
+                    )}
                   >
                     <FavouriteStar size={16} favourited={fav} />
                   </button>
@@ -667,7 +670,7 @@
                   onclick={(e) =>
                     openContextMenu(e, { kind: node.kind, id: node.id })}
                   aria-label={tUi('fileTree.toolbar.more')}
-                  title={tUi('fileTree.toolbar.more')}
+                  use:tooltip={tUi('fileTree.toolbar.more')}
                 >
                   <MoreVertical class="size-4" />
                 </button>
@@ -724,7 +727,7 @@
                 onclick={() => toggleFavourite(node.id)}
                 aria-pressed={fav}
                 aria-label={tUi(fav ? 'favourite.remove' : 'favourite.add')}
-                title={tUi(fav ? 'favourite.remove' : 'favourite.add')}
+                use:tooltip={tUi(fav ? 'favourite.remove' : 'favourite.add')}
               >
                 <FavouriteStar size={16} favourited={fav} />
               </button>
@@ -736,7 +739,7 @@
                 onclick={(e) =>
                   openContextMenu(e, { kind: node.kind, id: node.id })}
                 aria-label={tUi('fileTree.toolbar.more')}
-                title={tUi('fileTree.toolbar.more')}
+                use:tooltip={tUi('fileTree.toolbar.more')}
               >
                 <MoreVertical class="size-4" />
               </button>

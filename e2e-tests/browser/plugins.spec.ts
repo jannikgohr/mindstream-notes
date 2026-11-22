@@ -112,6 +112,43 @@ test.describe('plugin framework — bundled Templates plugin', () => {
       .click();
     // The plugin contributes a "Template sources" section with a folder setting.
     await expect(dialog.getByText('Template folder')).toBeVisible();
+    // The clicked button is gone, so focus moves to the new pane rather than
+    // falling back to the search box.
+    await expect(
+      dialog.getByRole('region', { name: 'Templates' })
+    ).toBeFocused();
+
+    await dialog
+      .getByRole('button', { name: 'Plugins', exact: true })
+      .first()
+      .click();
+    await dialog
+      .getByRole('button', { name: 'Plugin hotkeys' })
+      .first()
+      .click();
+    await expect(
+      dialog.getByRole('region', { name: 'Hotkeys', exact: true })
+    ).toBeFocused();
+  });
+
+  test('a hotkeys link opens Hotkeys even when a search hides it', async ({
+    page
+  }) => {
+    await boot(page);
+    const dialog = await openPluginsCategory(page);
+    const search = dialog.getByPlaceholder('Search settings…');
+    // Matches only the Templates folder setting, so the rail lists Plugins
+    // alone while the overview still offers its hotkeys links.
+    await search.fill('Template folder');
+
+    await dialog
+      .getByRole('button', { name: 'Plugin hotkeys' })
+      .first()
+      .click();
+    await expect(
+      dialog.getByRole('region', { name: 'Hotkeys', exact: true })
+    ).toBeFocused();
+    await expect(search).toHaveValue('');
   });
 
   test('toggling the plugin adds/removes its toolbar contribution', async ({

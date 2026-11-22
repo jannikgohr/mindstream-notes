@@ -44,6 +44,7 @@
   import { getSettingValue } from '$lib/settings/store.svelte';
   import { ui } from '$lib/state.svelte';
   import { setNoteFavourite, tree } from '$lib/stores/tree.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   // `header: false` when the host draws its own (the mobile details sheet).
   let { onClose, header = true }: { onClose?: () => void; header?: boolean } =
@@ -407,7 +408,7 @@
             </div>
             <h3
               class="truncate text-base font-semibold leading-6"
-              title={note.title}
+              use:tooltip={note.title}
             >
               {note.title}
             </h3>
@@ -427,7 +428,7 @@
             aria-label={note.favourite
               ? tUi('favourite.remove')
               : tUi('favourite.add')}
-            title={note.favourite
+            use:tooltip={note.favourite
               ? tUi('favourite.remove')
               : tUi('favourite.add')}
           >
