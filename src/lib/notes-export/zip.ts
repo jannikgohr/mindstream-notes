@@ -6,10 +6,12 @@
  * Note titles become archive paths, and some of those notes can come from
  * other people through a shared folder, so a path that could leave the
  * extraction folder is refused here, as the native writer does on disk.
+ *
+ * The browser's storage worker packs backups with this module, so it must not
+ * import Svelte state such as the i18n store: runes don't exist in a worker.
  */
 
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate';
-import { tUi } from '$lib/settings/i18n.svelte';
 
 /**
  * fflate writes no ZIP64 records, so sizes and offsets have to fit in 32 bits.
@@ -50,7 +52,7 @@ function createZipWriter(onChunk: (chunk: Uint8Array) => void) {
         entries + 1 > MAX_ZIP_ENTRIES ||
         total + bytes.length > MAX_ZIP_BYTES
       ) {
-        throw new Error(tUi('export.zip.tooLarge'));
+        throw new Error('The export is too large for a zip file');
       }
       entries += 1;
       total += bytes.length;
