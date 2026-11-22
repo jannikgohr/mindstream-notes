@@ -426,7 +426,7 @@
   {:else}
     <div
       class="flex h-8 w-full items-center gap-2 pl-2 text-xs"
-      title={currentName}
+      use:tooltip={currentName}
     >
       <VaultTile
         id={current?.id ?? ''}

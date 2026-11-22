@@ -18,6 +18,7 @@
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import { mobileState, toggleFabExpanded, collapseFab } from './state.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   export interface FabAction {
     id: string;
@@ -224,7 +225,7 @@
       : 'text-muted-foreground'}"
     aria-pressed={pinned}
     aria-label={tUiFormat('fab.pinAction', { action: action.label })}
-    title={tUiFormat('fab.pinAction', { action: action.label })}
+    use:tooltip={tUiFormat('fab.pinAction', { action: action.label })}
     onclick={() => onTogglePin(action.id)}
   >
     <Pin class="size-4" fill={pinned ? 'currentColor' : 'none'} />
@@ -252,7 +253,7 @@
       type="button"
       class="grid h-9 w-7 shrink-0 cursor-grab touch-none place-items-center rounded-md text-muted-foreground hover:text-foreground active:cursor-grabbing"
       aria-label={tUiFormat('fab.moveAction', { action: action.label })}
-      title={tUiFormat('fab.moveAction', { action: action.label })}
+      use:tooltip={tUiFormat('fab.moveAction', { action: action.label })}
       onpointerdown={(event) => startDrag(event, action)}
       onkeydown={(event) => keyMove(event, action)}
     >
@@ -356,7 +357,7 @@
                 type="button"
                 class="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
                 aria-label={action.label}
-                title={action.label}
+                use:tooltip={action.label}
                 onclick={(event) => run(action, event.currentTarget)}
               >
                 {@render actionIcon(action, 'size-[18px]')}
@@ -391,7 +392,7 @@
                 ? 'mobile.closeActionMenu'
                 : 'fab.showMenu'
             )}
-            title={tUi(
+            use:tooltip={tUi(
               mobileState.fabExpanded
                 ? 'mobile.closeActionMenu'
                 : 'fab.showMenu'

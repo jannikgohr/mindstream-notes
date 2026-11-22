@@ -179,7 +179,7 @@
     <div class="flex items-center gap-2">
       <span
         class="text-sm font-medium"
-        title={compact ? description : undefined}>{label}</span
+        use:tooltip={compact ? description : undefined}>{label}</span
       >
       {#if modified}
         <span

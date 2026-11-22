@@ -21,6 +21,7 @@
   import { closeNavOverlay, openNavOverlay } from '$lib/mobile/state.svelte';
   import { loadPluginDocs, type LoadedDocSection } from './docs-loader';
   import type { PluginDocSection } from './types';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     open: boolean;
@@ -124,7 +125,7 @@
               class={closeButton}
               onclick={() => (reading = false)}
               aria-label={tUi('back')}
-              title={tUi('back')}
+              use:tooltip={tUi('back')}
             >
               <ArrowLeft class="size-5" />
             </button>

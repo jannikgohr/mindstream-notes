@@ -4,6 +4,7 @@
   import { tUi } from '$lib/settings/i18n.svelte';
   import { rankSubstringMatches } from '$lib/search/substring-rank';
   import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   export interface KanbanNoteOption {
     id: string;
@@ -150,7 +151,7 @@
         type="button"
         class="kanban-note-icon-button"
         aria-label={tUi('editor.kanban.openLinkedNote')}
-        title={tUi('editor.kanban.openLinkedNote')}
+        use:tooltip={tUi('editor.kanban.openLinkedNote')}
         onclick={openLinkedNote}
         disabled={disabled || !selected}
       >
@@ -160,7 +161,7 @@
         type="button"
         class="kanban-note-icon-button"
         aria-label={tUi('editor.kanban.unlinkNote')}
-        title={tUi('editor.kanban.unlinkNote')}
+        use:tooltip={tUi('editor.kanban.unlinkNote')}
         onclick={clear}
         {disabled}
       >

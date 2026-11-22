@@ -28,6 +28,7 @@
     tree
   } from '$lib/stores/tree.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     noteId: string;
@@ -220,7 +221,9 @@
       <span
         class="inline-flex h-6 min-w-0 max-w-full items-center gap-1 rounded-md border border-border bg-background pl-2 pr-0.5 text-xs leading-none"
       >
-        <span class="min-w-0 truncate" title={tag}>{@render path(tag)}</span>
+        <span class="min-w-0 truncate" use:tooltip={tag}
+          >{@render path(tag)}</span
+        >
         <button
           type="button"
           class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
@@ -325,7 +328,7 @@
       type="button"
       class="flex h-6 flex-1 items-center truncate rounded-sm px-2 text-left font-mono leading-none transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-current"
       disabled={!clickable}
-      title={node.fullPath}
+      use:tooltip={node.fullPath}
       onclick={() => handlePick(node.fullPath)}
     >
       <span

@@ -107,7 +107,6 @@
               {#if device.secondFactor}
                 <span
                   class="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
-                  title={tUi('account.devices.secondFactor')}
                 >
                   <ShieldCheck class="size-3" />
                   {tUi('account.devices.secondFactor')}

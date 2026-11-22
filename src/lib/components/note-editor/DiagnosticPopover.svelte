@@ -22,6 +22,7 @@
   import { addCustomWord } from '$lib/diagnostics/custom-dictionary.svelte';
   import { replacementParts } from '$lib/diagnostics/replacement-display';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   let menu = $state<HTMLDivElement | null>(null);
   let expanded = $state(false);
@@ -207,7 +208,7 @@
             -->
             {#each replacementParts(suggestion) as part, i (i)}
               {#if part.space}
-                <span class="text-muted-foreground/70" title={part.space}
+                <span class="text-muted-foreground/70" use:tooltip={part.space}
                   >{part.text}</span
                 >
               {:else}{part.text}{/if}

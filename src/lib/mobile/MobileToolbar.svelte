@@ -17,6 +17,7 @@
     navigateToTabView,
     setDisplayMode
   } from './state.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 </script>
 
 <div class="touch-targets flex shrink-0 items-center gap-1">
@@ -27,7 +28,7 @@
       class="flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
       onclick={() => navigateToTabView(pluginId, view.id)}
       aria-label={label}
-      title={label}
+      use:tooltip={label}
     >
       <PluginIcon {pluginId} file={view.icon} class="size-4" />
     </button>
@@ -55,7 +56,7 @@
       onclick={() => setDisplayMode('list')}
       aria-pressed={mobileState.displayMode === 'list'}
       aria-label={tUi('display.list')}
-      title={tUi('display.list')}
+      use:tooltip={tUi('display.list')}
     >
       <List class="size-4" />
     </button>
@@ -68,7 +69,7 @@
       onclick={() => setDisplayMode('grid')}
       aria-pressed={mobileState.displayMode === 'grid'}
       aria-label={tUi('display.grid')}
-      title={tUi('display.grid')}
+      use:tooltip={tUi('display.grid')}
     >
       <LayoutGrid class="size-4" />
     </button>

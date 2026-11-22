@@ -35,6 +35,7 @@
   import { profilesState, loadProfiles } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import { toErrorMessage } from '$lib/api/errors';
+  import { tooltip } from '$lib/actions/tooltip';
 
   let { open = false, onClose }: { open?: boolean; onClose: () => void } =
     $props();
@@ -337,7 +338,7 @@
                   <button
                     type="button"
                     class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
-                    title={tUi('vault.rename')}
+                    use:tooltip={tUi('vault.rename')}
                     aria-label={tUi('vault.rename')}
                     disabled={busy}
                     onclick={() => startRename(profile)}
@@ -348,7 +349,7 @@
                     <button
                       type="button"
                       class="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-destructive"
-                      title={tUi('vault.delete')}
+                      use:tooltip={tUi('vault.delete')}
                       aria-label={tUi('vault.delete')}
                       disabled={busy}
                       onclick={() => confirmAndDelete(profile)}
