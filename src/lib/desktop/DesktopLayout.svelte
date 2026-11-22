@@ -230,6 +230,7 @@
   class TabViewRenderer implements IContentRenderer {
     private el: HTMLElement = document.createElement('div');
     private instance: ReturnType<typeof mount> | null = null;
+    private stopWaiting: (() => void) | null = null;
 
     get element(): HTMLElement {
       return this.el;
@@ -240,13 +241,16 @@
       this.el.style.width = '100%';
       const { pluginId, viewId } = parameters.params as ViewParams;
       if (!pluginId || !viewId) return;
-      this.instance = mount(PluginTabView, {
-        target: this.el,
-        props: { pluginId, viewId }
+      this.stopWaiting = mountWhenFirstVisible(parameters.api, () => {
+        this.instance = mount(PluginTabView, {
+          target: this.el,
+          props: { pluginId, viewId }
+        });
       });
     }
 
     dispose(): void {
+      this.stopWaiting?.();
       if (this.instance) {
         void unmount(this.instance).catch((err: unknown) =>
           console.error('[desktop] unmount failed', err)
