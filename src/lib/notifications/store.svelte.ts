@@ -2,6 +2,9 @@ import { isTauri } from '$lib/api/core';
 import { isMobile } from '$lib/platform';
 import { getSettingValue } from '$lib/settings/store.svelte';
 import type { AppNotification, NotificationKind } from './types';
+import type { AvailableUpdate } from '$lib/updater';
+
+export const UPDATE_RESCAN_INTERVAL_MS = 60 * 60 * 1000;
 
 interface NotificationState {
   items: AppNotification[];
@@ -60,19 +63,27 @@ export async function scanForUpdateNotifications(force = false): Promise<void> {
       return;
     }
 
-    upsertNotification({
-      id: `update:${available.version}`,
-      kind: 'update',
-      widgetType: 'update',
-      createdAt: Date.now(),
-      data: {
-        version: available.version,
-        currentVersion: available.currentVersion
-      },
-      onOpen: async () => {
-        await installAvailableUpdate(available);
-      }
-    });
+    const offer = (available: AvailableUpdate) => {
+      clearNotificationsByKind('update');
+      upsertNotification({
+        id: `update:${available.version}`,
+        kind: 'update',
+        widgetType: 'update',
+        createdAt: Date.now(),
+        data: {
+          version: available.version,
+          currentVersion: available.currentVersion
+        },
+        onOpen: async () => {
+          // The offer can be hours old, and every successful check, this one
+          // included, invalidates the id of the coordinated offer before it.
+          const latest = await checkForAvailableUpdate({ force: true });
+          if (latest) offer(latest);
+          await installAvailableUpdate(latest ?? available);
+        }
+      });
+    };
+    offer(available);
   } finally {
     notificationState.updateScanPending = false;
   }

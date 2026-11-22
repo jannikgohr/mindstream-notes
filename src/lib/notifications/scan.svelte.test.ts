@@ -89,4 +89,54 @@ describe('scanForUpdateNotifications (Tauri desktop)', () => {
     expect(installAvailableUpdate).toHaveBeenCalledWith(available);
     expect(notificationState.updateScanPending).toBe(false);
   });
+
+  it('replaces the offer when a later scan finds a newer version', async () => {
+    checkForAvailableUpdate.mockResolvedValue({
+      version: '1.1.0',
+      currentVersion: '1.0.0',
+      update: {}
+    });
+    await scanForUpdateNotifications(true);
+    checkForAvailableUpdate.mockResolvedValue({
+      version: '1.2.0',
+      currentVersion: '1.0.0',
+      update: {}
+    });
+
+    await scanForUpdateNotifications(true);
+
+    expect(notificationState.items.map((item) => item.id)).toEqual([
+      'update:1.2.0'
+    ]);
+  });
+
+  it('installs the version that is newest at the moment of the click', async () => {
+    checkForAvailableUpdate.mockResolvedValue({
+      version: '1.1.0',
+      currentVersion: '1.0.0',
+      update: {}
+    });
+    await scanForUpdateNotifications(true);
+    const newer = { version: '1.2.0', currentVersion: '1.0.0', update: {} };
+    checkForAvailableUpdate.mockResolvedValue(newer);
+
+    await notificationState.items[0].onOpen?.();
+
+    expect(checkForAvailableUpdate).toHaveBeenLastCalledWith({ force: true });
+    expect(installAvailableUpdate).toHaveBeenCalledWith(newer);
+    expect(notificationState.items.map((item) => item.id)).toEqual([
+      'update:1.2.0'
+    ]);
+  });
+
+  it('installs the known offer when the check at the click fails', async () => {
+    const available = { version: '1.1.0', currentVersion: '1.0.0', update: {} };
+    checkForAvailableUpdate.mockResolvedValue(available);
+    await scanForUpdateNotifications(true);
+    checkForAvailableUpdate.mockResolvedValue(null);
+
+    await notificationState.items[0].onOpen?.();
+
+    expect(installAvailableUpdate).toHaveBeenCalledWith(available);
+  });
 });
