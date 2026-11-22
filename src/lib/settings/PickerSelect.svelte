@@ -5,6 +5,8 @@
   interface Item {
     value: string;
     label: string;
+    parent?: string;
+    name?: string;
   }
   interface Props {
     value: string;
@@ -35,8 +37,8 @@
     { value: '', label: unsetLabel },
     ...items
   ]);
-  const currentLabel = $derived(
-    allItems.find((i) => i.value === value)?.label ?? unsetLabel
+  const currentItem = $derived(
+    allItems.find((i) => i.value === value) ?? allItems[0]
   );
   const filteredItems = $derived.by(() => {
     const normalized = query.trim().toLocaleLowerCase();
@@ -112,13 +114,19 @@
     class="inline-flex h-11 w-full items-center justify-between sm:h-8 sm:w-56 gap-2 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     onclick={() => (open ? close() : show())}
   >
-    <span class:italic={value === ''} class="truncate">{currentLabel}</span>
+    <span
+      class:italic={value === ''}
+      class="flex min-w-0"
+      title={currentItem.label}
+    >
+      {@render itemLabel(currentItem)}
+    </span>
     <ChevronDown class="size-3.5 shrink-0 text-muted-foreground" />
   </button>
 
   {#if open}
     <div
-      class="absolute right-0 z-[360] mt-1 w-64 overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg"
+      class="absolute right-0 z-[360] mt-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg"
     >
       <div class="flex items-center gap-2 border-b border-border px-2">
         <Search class="size-3.5 shrink-0 text-muted-foreground" />
@@ -158,7 +166,18 @@
             onmouseenter={() => (highlighted = index)}
             onclick={() => select(item)}
           >
-            <span class="truncate">{item.label}</span>
+            {#if item.parent && item.name}
+              <span class="flex min-w-0 flex-col" title={item.label}>
+                <span class="truncate">{item.name}</span>
+                <span
+                  dir="rtl"
+                  class="truncate text-left text-xs text-muted-foreground"
+                  ><bdi>{item.parent}</bdi></span
+                >
+              </span>
+            {:else}
+              <span class="truncate" title={item.label}>{item.label}</span>
+            {/if}
             {#if item.value === value}
               <Check class="size-3.5 shrink-0 text-muted-foreground" />
             {/if}
@@ -172,3 +191,18 @@
     </div>
   {/if}
 </div>
+
+<!-- The parent path gives up its width before the name does, and rtl drops its
+     outermost folders first; bdi keeps the path itself left to right. -->
+{#snippet itemLabel(item: Item)}
+  {#if item.parent && item.name}
+    <span
+      dir="rtl"
+      class="min-w-0 shrink-[1000] truncate text-left text-muted-foreground"
+      ><bdi>{item.parent} /&nbsp;</bdi></span
+    >
+    <span class="min-w-0 truncate">{item.name}</span>
+  {:else}
+    <span class="truncate">{item.label}</span>
+  {/if}
+{/snippet}
