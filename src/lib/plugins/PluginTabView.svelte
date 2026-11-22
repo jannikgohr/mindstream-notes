@@ -12,7 +12,7 @@
 
 <div class="flex h-full min-h-0 flex-col bg-background">
   {#if ref}
-    {#key ref.view}
+    {#key `${pluginId}:${viewId}`}
       <PluginSchemaView {ref} source={tabViewPanelId(pluginId, viewId)} tab />
     {/key}
   {:else}
