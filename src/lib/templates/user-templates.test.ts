@@ -27,7 +27,10 @@ vi.mock('$lib/api/notes', () => ({
 // User templates only exist in the app (rendering runs the plugin's component).
 vi.mock('$lib/api/core', () => ({ isTauri: () => true }));
 vi.mock('$lib/api/plugins', () => ({ pluginsRunScript }));
-vi.mock('$lib/settings/i18n.svelte', () => ({ i18n: { language: 'en' } }));
+vi.mock('$lib/settings/i18n.svelte', () => ({
+  i18n: { language: 'en' },
+  tUi: (key: string) => key
+}));
 vi.mock('$lib/stores/tree.svelte', () => ({ tree: state, createNoteIn }));
 vi.mock('$lib/stores/open-note-intent.svelte', () => ({ requestOpenNote }));
 vi.mock('$lib/settings/store.svelte', () => ({

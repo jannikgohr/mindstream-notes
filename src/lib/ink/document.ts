@@ -76,6 +76,7 @@ import {
   INK_META,
   INK_SCHEMA
 } from './page-document';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 const STROKES_KEY = 'strokes';
 const FIELD_ID = 'id';
@@ -121,8 +122,7 @@ export class InkDocument {
     this.doc = doc;
     this.strokes = doc.getArray<Y.Map<unknown>>(STROKES_KEY);
     const version = doc.getMap<number>(INK_META).get('schema') ?? 0;
-    if (version > INK_SCHEMA)
-      throw new Error('This ink document requires a newer app version.');
+    if (version > INK_SCHEMA) throw new Error(tUi('ink.newerVersion'));
   }
 
   hasPages(): boolean {

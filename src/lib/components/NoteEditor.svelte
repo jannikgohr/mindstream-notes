@@ -129,7 +129,7 @@
     SEARCH_ACTIVE_NOTE_COMMAND,
     type EditorListener
   } from '$lib/hotkeys/bus.svelte';
-  import { tUi } from '$lib/settings/i18n.svelte';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import FindBar from './FindBar.svelte';
   import EditorToolbar from './editor-toolbar/EditorToolbar.svelte';
   import MobileEditorToolbar from './editor-toolbar/MobileEditorToolbar.svelte';
@@ -1846,11 +1846,11 @@
       <p
         class="absolute left-0 top-0 z-10 px-6 py-4 text-sm text-muted-foreground"
       >
-        Loading note…
+        {tUi('editor.markdown.loading')}
       </p>
     {:else if loadError}
       <p class="absolute left-0 top-0 z-10 px-6 py-4 text-sm text-destructive">
-        Couldn't load note: {loadError}
+        {tUiFormat('editor.markdown.loadFailed', { error: loadError })}
       </p>
     {/if}
     <div class="flex h-full w-full">

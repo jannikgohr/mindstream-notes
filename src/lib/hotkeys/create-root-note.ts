@@ -1,18 +1,19 @@
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { createNoteIn } from '$lib/stores/tree.svelte';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 type RootNoteKind = 'markdown' | 'freeform' | 'ink' | 'kanban';
 
 function rootNoteTitle(kind: RootNoteKind): string {
   switch (kind) {
     case 'freeform':
-      return 'Untitled drawing canvas';
+      return tUi('fileTree.draft.drawing');
     case 'ink':
-      return 'Untitled handwritten note';
+      return tUi('fileTree.draft.ink');
     case 'kanban':
-      return 'Untitled board';
+      return tUi('fileTree.draft.kanban');
     case 'markdown':
-      return 'Untitled';
+      return tUi('fileTree.fallback.noteTitle');
   }
 }
 

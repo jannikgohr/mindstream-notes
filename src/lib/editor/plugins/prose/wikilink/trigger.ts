@@ -18,6 +18,7 @@ import {
   typeaheadKeys
 } from '../typeahead';
 import type { WikilinkBridge } from '../../wikilink-bridge.svelte';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 /* --- Trigger plugin -------------------------------------------------------- */
 
@@ -204,7 +205,7 @@ export function wikilinkTriggerPlugin(
     }
     const cursor = view.state.selection.from;
     const replaceTo = findInsertionReplaceTo(view.state, start, cursor);
-    const label = note.title.trim() || 'Untitled';
+    const label = note.title.trim() || tUi('fileTree.fallback.noteTitle');
     commitTypeahead(
       view,
       start,
