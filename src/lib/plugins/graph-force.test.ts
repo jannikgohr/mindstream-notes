@@ -81,6 +81,25 @@ describe('createForceLayout', () => {
     expect(closest).toBeGreaterThanOrEqual(8);
   });
 
+  it('parts two overlapping nodes by the same step wherever they are', () => {
+    // Only collisions act. Where the pair lies decides which grid cells and
+    // table slots it falls in, and must not decide how far it is pushed.
+    const apart = (shift: number) => {
+      const layout = layoutOf(2, [], {
+        x: Float32Array.from([-4 + shift, -1 + shift]),
+        y: Float32Array.from([32 + shift, 35 + shift]),
+        repel: 0,
+        centre: 0
+      });
+      layout.tick();
+      return distance(layout, 0, 1);
+    };
+    const expected = apart(0);
+    expect(expected).toBeGreaterThan(Math.hypot(3, 3));
+    for (const shift of [5, 7, 13, 100, -53, 1000.5])
+      expect(apart(shift)).toBeCloseTo(expected, 6);
+  });
+
   it('grows: a node stays out until it is active, then joins by its link', () => {
     // A chain 0-1-2 and a far-off start for the last node.
     const layout = layoutOf(3, [0, 1, 1, 2]);

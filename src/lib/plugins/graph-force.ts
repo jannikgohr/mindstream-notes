@@ -338,11 +338,15 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
 
   // Nodes by grid cell, each cell as wide as the widest pair that can touch.
   // Cells hash into a table, so two cells can share a slot, and a node is
-  // only taken from a slot if it lies in the cell being looked at.
+  // only taken from a slot if it was filed under the cell being looked at.
+  // A node keeps the cell it was filed under for the whole pass, though the
+  // pass itself moves it.
   let slots = 16;
   while (slots < 2 * n) slots *= 2;
   const gridHead = new Int32Array(options.collide ? slots : 0);
   const gridNext = new Int32Array(options.collide ? n : 0);
+  const cellX = new Int32Array(options.collide ? n : 0);
+  const cellY = new Int32Array(options.collide ? n : 0);
   let maxRadius = 0;
   for (let i = 0; i < n; i++) maxRadius = Math.max(maxRadius, radius[i]);
   const gridSize = 2 * (maxRadius + COLLIDE_PAD);
@@ -352,10 +356,9 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
   function collide(n: number) {
     gridHead.fill(-1);
     for (let i = 0; i < n; i++) {
-      const k = slot(
-        Math.floor((s[4 * i] + s[4 * i + 2]) / gridSize),
-        Math.floor((s[4 * i + 1] + s[4 * i + 3]) / gridSize)
-      );
+      cellX[i] = Math.floor((s[4 * i] + s[4 * i + 2]) / gridSize);
+      cellY[i] = Math.floor((s[4 * i + 1] + s[4 * i + 3]) / gridSize);
+      const k = slot(cellX[i], cellY[i]);
       gridNext[i] = gridHead[k];
       gridHead[k] = i;
     }
@@ -363,8 +366,8 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
       const xi = s[4 * i] + s[4 * i + 2];
       const yi = s[4 * i + 1] + s[4 * i + 3];
       const ri = radius[i] + COLLIDE_PAD;
-      const cx = Math.floor(xi / gridSize);
-      const cy = Math.floor(yi / gridSize);
+      const cx = cellX[i];
+      const cy = cellY[i];
       // A pair is met once: in its own cell from the lower index, and
       // across cells from the one whose cell comes first.
       for (let c = 0; c < 5; c++) {
@@ -373,13 +376,9 @@ export function createForceLayout(options: ForceOptions): ForceLayout {
           const gy = cy + (c === 0 ? 0 : c === 4 ? 1 : c - 2);
           for (let j = gridHead[slot(gx, gy)]; j >= 0; j = gridNext[j]) {
             if (c === 0 && j <= i) continue;
+            if (cellX[j] !== gx || cellY[j] !== gy) continue;
             const xj = s[4 * j] + s[4 * j + 2];
             const yj = s[4 * j + 1] + s[4 * j + 3];
-            if (
-              Math.floor(xj / gridSize) !== gx ||
-              Math.floor(yj / gridSize) !== gy
-            )
-              continue;
             const rj = radius[j] + COLLIDE_PAD;
             const r = ri + rj;
             let dx = xi - xj;
