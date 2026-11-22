@@ -29,6 +29,7 @@
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
   import MobileNotificationCenter from './MobileNotificationCenter.svelte';
   import MobileVaultSwitcher from './MobileVaultSwitcher.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   type Surface = 'notifications' | 'vaults';
 
@@ -79,7 +80,7 @@
     type="button"
     onclick={() => show('vaults')}
     aria-label={tUi('vault.switch')}
-    title={vault?.name ?? tUi('vault.switch')}
+    use:tooltip={vault?.name ?? tUi('vault.switch')}
     class="mr-0.5 grid size-11 shrink-0 place-items-center rounded-lg hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
   >
     <VaultTile

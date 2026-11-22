@@ -31,6 +31,7 @@
     registeredNotes,
     setRestoreUndo
   } from '$lib/stores/note-history-bridge.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     noteId: string;
@@ -345,7 +346,7 @@
         onclick={() => void refreshClicked()}
         disabled={spinning}
         aria-label={tUi('history.refresh')}
-        title={tUi('history.refresh')}
+        use:tooltip={tUi('history.refresh')}
       >
         <RefreshCw class="size-3.5 {spinning ? 'animate-spin' : ''}" />
       </button>
@@ -375,7 +376,7 @@
         class="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         onclick={() => clearRestoreUndo(noteId)}
         aria-label={tUi('history.undoDismiss')}
-        title={tUi('history.undoDismiss')}
+        use:tooltip={tUi('history.undoDismiss')}
       >
         <X class="size-3.5" />
       </button>

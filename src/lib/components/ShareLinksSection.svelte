@@ -21,6 +21,7 @@
   import { loadTree } from '$lib/stores/tree.svelte';
   import { i18n, tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   import { pushToast } from './toast.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Props {
     collectionId: string;
@@ -199,7 +200,7 @@
             class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             disabled={removing === link.uid}
             aria-label={tUi('sharing.links.remove')}
-            title={tUi('sharing.links.remove')}
+            use:tooltip={tUi('sharing.links.remove')}
             onclick={() => void remove(link.uid)}
           >
             <Trash2 class="size-3.5" />

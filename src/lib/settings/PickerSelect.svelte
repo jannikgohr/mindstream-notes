@@ -1,6 +1,7 @@
 <script lang="ts">
   /** Searchable folder/tag picker used by settings rows. */
   import { Check, ChevronDown, Search, X } from '@lucide/svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   interface Item {
     value: string;
@@ -117,7 +118,7 @@
     <span
       class:italic={value === ''}
       class="flex min-w-0"
-      title={currentItem.label}
+      use:tooltip={currentItem.label}
     >
       {@render itemLabel(currentItem)}
     </span>
@@ -167,7 +168,10 @@
             onclick={() => select(item)}
           >
             {#if item.parent && item.name}
-              <span class="flex min-w-0 flex-col" title={item.label}>
+              <span
+                class="flex min-w-0 flex-col"
+                use:tooltip={{ label: item.label, side: 'right' }}
+              >
                 <span class="truncate">{item.name}</span>
                 <span
                   dir="rtl"
@@ -176,7 +180,11 @@
                 >
               </span>
             {:else}
-              <span class="truncate" title={item.label}>{item.label}</span>
+              <span
+                class="truncate"
+                use:tooltip={{ label: item.label, side: 'right' }}
+                >{item.label}</span
+              >
             {/if}
             {#if item.value === value}
               <Check class="size-3.5 shrink-0 text-muted-foreground" />
