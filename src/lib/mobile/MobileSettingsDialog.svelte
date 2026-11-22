@@ -47,6 +47,7 @@
   import { allPlugins, pluginById } from '$lib/plugins/registry.svelte';
   import { resolvePluginStringOptional } from '$lib/plugins/plugin-i18n';
   import { closeNavOverlay, openNavOverlay } from './state.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   let activeCategoryId = $state<string | null>(null);
   let activePluginId = $state<string | null>(null);
@@ -247,7 +248,7 @@
             class="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onclick={back}
             aria-label={tUi('back')}
-            title={tUi('back')}
+            use:tooltip={tUi('back')}
           >
             <ArrowLeft class="size-5" />
           </button>

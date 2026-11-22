@@ -82,6 +82,7 @@
     allowEmbedHost,
     allowedEmbedHosts
   } from '$lib/freeform/embed-allowed-hosts';
+  import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
 
   interface Props {
     noteId: string;
@@ -110,11 +111,11 @@
   let collabOnline = $state(false);
   let collabConfigured = $state(false);
 
-  // Excalidraw bumps element version nonces when it re-imports a scene on
-  // mount, which flushes a benign LOCAL_ORIGIN write to the Y.Doc. Without a
-  // gate that churn marks the note dirty and snapshots a "no-edit" version on
-  // the next close/remount. A real edit is always preceded by a pointer or key
-  // interaction on the canvas, so only arm history capture once that happens.
+  // A first open can still write once without an edit: a new canvas stores
+  // Excalidraw's default appState, and older scenes are migrated or get
+  // fractional indices. That write must not become a "no-edit" version. A real
+  // edit is always preceded by a pointer or key interaction on the canvas, so
+  // only arm history capture once that happens.
   let canvasInteracted = false;
   let capturingHistorySnapshot = false;
   let unregisterHistory: (() => void) | null = null;
@@ -642,9 +643,7 @@
       role="status"
     >
       <Trash2 class="size-3.5 shrink-0" aria-hidden="true" />
-      <span
-        >This note is in the trash and is read-only. Restore it to edit.</span
-      >
+      <span>{tUi('editor.trash.banner')}</span>
     </div>
   {/if}
   <!--
@@ -658,13 +657,13 @@
       <p
         class="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
       >
-        Loading drawing…
+        {tUi('editor.freeform.loading')}
       </p>
     {:else if loadError}
       <p
         class="absolute inset-0 flex items-center justify-center px-2 text-sm text-destructive"
       >
-        Couldn't load drawing: {loadError}
+        {tUiFormat('editor.freeform.loadFailed', { error: loadError })}
       </p>
     {/if}
     <!--

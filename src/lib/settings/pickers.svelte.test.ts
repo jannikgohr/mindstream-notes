@@ -85,6 +85,14 @@ describe('folderOptions', () => {
     const labels = options.map((o) => o.label);
     expect(labels).toContain('Root');
     expect(labels).toContain('Root / Child');
+    // The picker shortens the parent path first, so it needs the parts.
+    expect(options.find((o) => o.label === 'Root / Child')).toMatchObject({
+      parent: 'Root',
+      name: 'Child'
+    });
+    expect(options.find((o) => o.label === 'Root')).not.toHaveProperty(
+      'parent'
+    );
     // Trash and its descendants are excluded.
     expect(options.some((o) => o.value === 'trash')).toBe(false);
     expect(options.some((o) => o.value === 'gone')).toBe(false);
@@ -96,7 +104,12 @@ describe('folderOptions', () => {
 describe('noteOptions', () => {
   it('lists notes outside the trash under their folder path', () => {
     expect(noteOptions()).toEqual([
-      { value: 'live', label: 'Root / Child / Daily' }
+      {
+        value: 'live',
+        label: 'Root / Child / Daily',
+        parent: 'Root / Child',
+        name: 'Daily'
+      }
     ]);
   });
 });

@@ -16,10 +16,23 @@ import { ancestorIsTrash } from '$lib/editor/trash';
 import { folderPathLabel } from '$lib/notes/folder-path';
 import { noteIsUnderTrash } from '$lib/stores/note-source.svelte';
 import type { Setting } from './types';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 export interface PickerItem {
   value: string;
   label: string;
+  /** Where the item lives, such as "Parent / Child" for a folder. The picker
+   *  shortens this before `name`, so same-named items stay distinguishable. */
+  parent?: string;
+  name?: string;
+}
+
+function pathItem(value: string, parent: string, name: string): PickerItem {
+  return {
+    value,
+    label: parent ? `${parent} / ${name}` : name,
+    ...(parent ? { parent, name } : {})
+  };
 }
 
 /** True when `id` is the trash folder or lives anywhere under it. */
@@ -46,7 +59,13 @@ function liveFolderIds(): Set<string> {
 export function folderOptions(): PickerItem[] {
   const byId = tree.collectionsById;
   return [...liveFolderIds()]
-    .map((id) => ({ value: id, label: folderPathLabel(id, byId) }))
+    .map((id) =>
+      pathItem(
+        id,
+        folderPathLabel(byId[id].parent_collection_id, byId),
+        byId[id].name
+      )
+    )
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
@@ -56,11 +75,11 @@ export function noteOptions(): PickerItem[] {
   return Object.values(tree.notesById)
     .filter((note) => !noteIsUnderTrash(note, byId))
     .map((note) => {
-      const title = note.title.trim() || 'Untitled';
+      const title = note.title.trim() || tUi('fileTree.fallback.noteTitle');
       const folder = note.parent_collection_id
         ? folderPathLabel(note.parent_collection_id, byId)
         : '';
-      return { value: note.id, label: folder ? `${folder} / ${title}` : title };
+      return pathItem(note.id, folder, title);
     })
     .sort((a, b) => a.label.localeCompare(b.label));
 }

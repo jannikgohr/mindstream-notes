@@ -5,6 +5,7 @@
     scrollToNoteHeading
   } from '$lib/stores/note-outline.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
+  import { tooltip } from '$lib/actions/tooltip';
 
   let { noteId }: { noteId: string } = $props();
   const headings = $derived(noteOutline.byNote[noteId] ?? []);
@@ -33,7 +34,7 @@
           type="button"
           class="block w-full truncate py-1.5 pr-1 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           style:padding-left={`${12 + Math.min(heading.level - firstLevel, 3) * 10}px`}
-          title={heading.title}
+          use:tooltip={heading.title}
           aria-label={tUi('sidebar.outline.goTo').replace(
             '{heading}',
             heading.title

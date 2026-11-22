@@ -29,7 +29,7 @@ import { runPluginScript } from '$lib/plugins/run-script';
 import { createNoteIn, tree } from '$lib/stores/tree.svelte';
 import { requestOpenNote } from '$lib/stores/open-note-intent.svelte';
 import { getSettingValue } from '$lib/settings/store.svelte';
-import { i18n } from '$lib/settings/i18n.svelte';
+import { i18n, tUi } from '$lib/settings/i18n.svelte';
 import { shouldOpenOnCreate } from '$lib/plugins/templates';
 import { pluginById } from '$lib/plugins/registry.svelte';
 
@@ -95,7 +95,7 @@ export function userTemplateEntries(): UserTemplateEntry[] {
     if (!source) continue;
     entries.push({
       noteId: note.id,
-      label: note.title.trim() || 'Untitled',
+      label: note.title.trim() || tUi('fileTree.fallback.noteTitle'),
       noteKind: note.note_kind,
       source
     });
@@ -126,7 +126,8 @@ async function renderUserTemplate(
   title?: string
 ): Promise<{ title: string; body: string }> {
   const summary = tree.notesById[templateNoteId];
-  const rawTitle = title ?? summary?.title ?? 'Untitled';
+  const rawTitle =
+    title ?? summary?.title ?? tUi('fileTree.fallback.noteTitle');
   const full = await loadNote(templateNoteId);
 
   const rendered = (await runPluginScript(

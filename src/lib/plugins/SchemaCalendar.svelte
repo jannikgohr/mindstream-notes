@@ -5,6 +5,7 @@
   import { ChevronLeft, ChevronRight } from '@lucide/svelte';
   import { i18n, tUi } from '$lib/settings/i18n.svelte';
   import { viewText, type ViewNode } from './view-schema';
+  import { tooltip } from '$lib/actions/tooltip';
 
   type CalendarNode = Extract<ViewNode, { type: 'calendar' }>;
   let {
@@ -78,7 +79,7 @@
               {...props}
               class={MONTH_BUTTON}
               aria-label={tUi('calendar.previousMonth')}
-              title={tUi('calendar.previousMonth')}
+              use:tooltip={tUi('calendar.previousMonth')}
             >
               <ChevronLeft class="size-4" />
             </button>
@@ -90,7 +91,7 @@
               {...props}
               class={MONTH_BUTTON}
               aria-label={tUi('calendar.nextMonth')}
-              title={tUi('calendar.nextMonth')}
+              use:tooltip={tUi('calendar.nextMonth')}
             >
               <ChevronRight class="size-4" />
             </button>
@@ -117,24 +118,31 @@
                 {@const mark = node.days[date.toString()]}
                 <Calendar.Cell {date} month={month.value} class="p-0">
                   <Calendar.Day
-                    title={mark?.title && viewText(pluginId, mark.title)}
                     class="group mx-auto flex size-8 flex-col items-center justify-center rounded-md text-xs tabular-nums transition-colors hover:bg-accent data-[outside-month]:text-muted-foreground/50 data-[today]:not-data-[selected]:text-accent-brand data-[today]:not-data-[selected]:ring-1 data-[today]:not-data-[selected]:ring-inset data-[today]:not-data-[selected]:ring-accent-brand/50 data-[selected]:bg-accent-brand data-[selected]:text-accent-brand-foreground data-[selected]:hover:bg-accent-brand {mark?.strong
                       ? 'font-semibold'
                       : ''}"
                   >
-                    <span class="leading-none">{date.day}</span>
-                    <span
-                      class="mt-0.5 flex h-1 items-center gap-px"
-                      aria-hidden="true"
-                    >
-                      {#each mark?.marks ?? [] as kind, i (i)}
+                    {#snippet child({ props })}
+                      <div
+                        {...props}
+                        use:tooltip={mark?.title &&
+                          viewText(pluginId, mark.title)}
+                      >
+                        <span class="leading-none">{date.day}</span>
                         <span
-                          class="size-1 rounded-full {kind === 'accent'
-                            ? 'bg-accent-brand group-data-[selected]:bg-accent-brand-foreground'
-                            : 'bg-muted-foreground/50 group-data-[selected]:bg-accent-brand-foreground/60'}"
-                        ></span>
-                      {/each}
-                    </span>
+                          class="mt-0.5 flex h-1 items-center gap-px"
+                          aria-hidden="true"
+                        >
+                          {#each mark?.marks ?? [] as kind, i (i)}
+                            <span
+                              class="size-1 rounded-full {kind === 'accent'
+                                ? 'bg-accent-brand group-data-[selected]:bg-accent-brand-foreground'
+                                : 'bg-muted-foreground/50 group-data-[selected]:bg-accent-brand-foreground/60'}"
+                            ></span>
+                          {/each}
+                        </span>
+                      </div>
+                    {/snippet}
                   </Calendar.Day>
                 </Calendar.Cell>
               {/each}

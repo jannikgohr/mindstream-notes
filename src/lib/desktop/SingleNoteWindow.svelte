@@ -103,7 +103,10 @@
     return subscribeOpenNoteRequest((id) => {
       if (id === noteId) return;
       const target = tree.notesById[id];
-      void requestNoteWindow(id, target?.title ?? 'Note');
+      void requestNoteWindow(
+        id,
+        target?.title ?? tUi('fileTree.fallback.noteTitle')
+      );
     });
   });
 
@@ -207,15 +210,13 @@
     <div class="flex h-full min-h-0 w-full">
       <section class="min-w-0 flex-1 overflow-hidden fullscreen-note">
         {#if exists === null}
-          <p class="p-4 text-sm text-muted-foreground">Loading…</p>
+          <p class="p-4 text-sm text-muted-foreground">{tUi('boot.loading')}</p>
         {:else if !exists}
           <div
             class="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
           >
-            Note <code class="mx-1 rounded bg-muted px-1.5 py-0.5"
-              >{noteId}</code
-            >
-            couldn't be found in the database.
+            {tUi('popout.notFound')}
+            <code class="mx-1 rounded bg-muted px-1.5 py-0.5">{noteId}</code>
           </div>
         {:else}
           <NoteKindRenderer {noteId} {noteKind} />

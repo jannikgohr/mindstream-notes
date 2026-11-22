@@ -1148,26 +1148,24 @@ pub fn start_host(app: &tauri::App) -> AppResult<()> {
             }
             let quiet = crate::was_started_by_autostart()
                 || crate::coordinator_revival::background_launch();
-            let (endpoint, reply) = match ipc::request_with_endpoint(
-                &root,
-                &request(&HostCommand::Status)?,
-            ) {
-                Ok(reply) => reply,
-                // The lease is held but nothing answers. Ownership is never
-                // taken over; the user decides what happens to that process.
-                Err(error) if !quiet => {
-                    log::error!("[vaults] running coordinator is unresponsive: {error}");
-                    use tauri_plugin_dialog::DialogExt;
-                    let handle = app.handle().clone();
-                    app.dialog()
-                            .message("Mindstream Notes is already running but is not responding. End the running Mindstream Notes process, then start it again.")
+            let (endpoint, reply) =
+                match ipc::request_with_endpoint(&root, &request(&HostCommand::Status)?) {
+                    Ok(reply) => reply,
+                    // The lease is held but nothing answers. Ownership is never
+                    // taken over; the user decides what happens to that process.
+                    Err(error) if !quiet => {
+                        log::error!("[vaults] running coordinator is unresponsive: {error}");
+                        use tauri_plugin_dialog::DialogExt;
+                        let handle = app.handle().clone();
+                        app.dialog()
+                            .message(native_text(app.handle(), "nativeDialog.unresponsive"))
                             .title("Mindstream Notes")
                             .kind(tauri_plugin_dialog::MessageDialogKind::Error)
                             .show(move |_| handle.exit(1));
-                    return Ok(());
-                }
-                Err(error) => return Err(error),
-            };
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                };
             reply.map_err(AppError::InvalidArg)?;
             if !quiet {
                 crate::foreground::transfer(&endpoint);
@@ -1470,11 +1468,11 @@ fn quarantine_unresumable_records(app: &AppHandle) {
                 );
                 use tauri_plugin_dialog::DialogExt;
                 app.dialog()
-                    .message(format!(
-                        "A saved window session could not be resumed and was set aside. Your vaults are unchanged.\n\n{}",
-                        evidence.display()
-                    ))
-                    .title("Startup recovery")
+                    .message(
+                        native_text(app, "nativeDialog.recovery.setAside")
+                            .replace("{path}", &evidence.display().to_string()),
+                    )
+                    .title(native_text(app, "nativeDialog.recovery.title"))
                     .show(|_| {});
             }
             // Resumption reports the same failure and retains the record.
@@ -1487,10 +1485,10 @@ fn report_recovery_failure(app: &AppHandle, error: &AppError) {
     log::error!("[vaults] startup recovery failed: {error}");
     use tauri_plugin_dialog::DialogExt;
     app.dialog()
-        .message(format!(
-            "Startup recovery could not finish. Your vaults are unchanged and can be opened normally.\n\n{error}"
-        ))
-        .title("Startup recovery")
+        .message(
+            native_text(app, "nativeDialog.recovery.failed").replace("{error}", &error.to_string()),
+        )
+        .title(native_text(app, "nativeDialog.recovery.title"))
         .show(|_| {});
 }
 
@@ -1543,6 +1541,16 @@ fn picker_preferences(
                 )
             }),
     )
+}
+
+/// A native dialog's text in the saved interface language, English when no
+/// settings exist yet.
+fn native_text(app: &AppHandle, key: &str) -> String {
+    let language = crate::paths::app_data_root(app)
+        .ok()
+        .and_then(|root| picker_preferences(&root).ok())
+        .map_or_else(|| "en".to_owned(), |(language, _)| language);
+    crate::i18n::t_ui(&language, key)
 }
 
 pub(crate) fn allows_host_invoke(label: &str, command: &str) -> bool {
@@ -2688,15 +2696,21 @@ pub(crate) fn update_failed(app: &AppHandle, operation_id: Uuid, error: AppError
     for (launch_id, endpoint) in &targets {
         if let Ok(request) = request(&WorkerCommand::QuitFailed {
             launch_id: *launch_id,
-            message: format!("Update failed: {error}"),
+            message: native_text(app, "nativeDialog.update.failedDetail")
+                .replace("{error}", &error.to_string()),
         }) {
             let _ = endpoint.retry_call(&request);
         }
     }
     if targets.is_empty() {
         use tauri_plugin_dialog::DialogExt;
-        app.dialog().message(format!("The update could not finish. Your recovery information has been retained.\n\n{error}"))
-            .title("Update failed").show(|_| {});
+        app.dialog()
+            .message(
+                native_text(app, "nativeDialog.update.message")
+                    .replace("{error}", &error.to_string()),
+            )
+            .title(native_text(app, "nativeDialog.update.title"))
+            .show(|_| {});
     }
 }
 

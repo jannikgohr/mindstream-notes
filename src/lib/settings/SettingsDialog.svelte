@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { Dialog } from 'bits-ui';
   import { isTauri } from '$lib/api/core';
   import { X, Search, ChevronRight } from '@lucide/svelte';
@@ -80,13 +81,27 @@
     pluginsExpanded = true;
   }
 
+  const paneHeadingId = $props.id();
+  let pane = $state<HTMLElement | null>(null);
+  let deepLinked = false;
+
+  /** A link that swaps the pane removes the focused element, and the focus
+   *  trap would then fall back to the search box. Land on the new pane. */
+  function focusPane(): void {
+    void tick().then(() => pane?.focus({ preventScroll: true }));
+  }
+
   // Honor a deep-link requested via openSettings('<category>') — e.g. a
   // notification jumping to the Plugins overview. Consumed once.
   $effect(() => {
     const requested = settingsDialog.requestedCategory;
     if (requested) {
+      // A search would hide the requested category behind the first match.
+      query = '';
       selectCategory(requested);
       settingsDialog.requestedCategory = null;
+      deepLinked = true;
+      focusPane();
     }
   });
 
@@ -214,6 +229,12 @@
       class="fixed inset-0 z-350 bg-scrim backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     />
     <Dialog.Content
+      onOpenAutoFocus={(event: Event) => {
+        if (!deepLinked && !settingsDialog.requestedCategory) return;
+        deepLinked = false;
+        event.preventDefault();
+        focusPane();
+      }}
       class="fixed left-1/2 top-1/2 z-350 grid h-[80vh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 grid-rows-[auto_1fr] overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-xl focus:outline-none"
     >
       <header
@@ -354,10 +375,13 @@
              hard crop through the last row; the extra end padding lets that
              row scroll clear of the fade. -->
         <section
-          class="themed-scrollbar overflow-y-auto px-6 pb-12 pt-5 [mask-image:linear-gradient(to_bottom,black_calc(100%-1rem),transparent)]"
+          bind:this={pane}
+          tabindex="-1"
+          aria-labelledby={paneHeadingId}
+          class="themed-scrollbar overflow-y-auto px-6 pb-12 pt-5 focus:outline-none [mask-image:linear-gradient(to_bottom,black_calc(100%-1rem),transparent)]"
         >
           {#if activeCategory}
-            <h2 class="text-base font-semibold">
+            <h2 id={paneHeadingId} class="text-base font-semibold">
               {paneHeading}
             </h2>
             {#if paneDescription}
@@ -373,8 +397,15 @@
               </p>
             {:else if showingPluginOverview}
               <PluginsOverview
-                onOpenSettings={selectPlugin}
-                onOpenHotkeys={() => selectCategory('hotkeys')}
+                onOpenSettings={(id) => {
+                  selectPlugin(id);
+                  focusPane();
+                }}
+                onOpenHotkeys={() => {
+                  query = '';
+                  selectCategory('hotkeys');
+                  focusPane();
+                }}
               />
             {:else}
               {#each sectionsToRender as sec (sec.id)}

@@ -2,6 +2,7 @@ import { Home, Share2, Star, Trash2 } from '@lucide/svelte';
 import type { NoteKind, TreeNode } from '$lib/api';
 import type { IconComponent } from '$lib/settings/icons';
 import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
+import { tUi } from '$lib/settings/i18n.svelte';
 
 export type DraftKind = 'note' | 'folder' | 'drawing' | 'ink' | 'kanban';
 export type Draft = {
@@ -88,15 +89,15 @@ export const FILE_EXPLORER_SOURCES: {
 export function defaultDraftText(kind: DraftKind): string {
   switch (kind) {
     case 'folder':
-      return 'Untitled folder';
+      return tUi('fileTree.draft.folder');
     case 'drawing':
-      return 'Untitled drawing canvas';
+      return tUi('fileTree.draft.drawing');
     case 'ink':
-      return 'Untitled handwritten note';
+      return tUi('fileTree.draft.ink');
     case 'kanban':
-      return 'Untitled board';
+      return tUi('fileTree.draft.kanban');
     case 'note':
-      return 'Untitled';
+      return tUi('fileTree.fallback.noteTitle');
   }
 }
 
@@ -262,11 +263,11 @@ export function emptyStateMessageForSource(
 ): string {
   switch (source) {
     case 'favourites':
-      return 'Favourite notes will appear here.';
+      return tUi('fileTree.empty.favourites');
     case 'shared':
-      return 'Shared folders will appear here.';
+      return tUi('fileTree.empty.shared');
     case 'trash':
-      return 'Trash is empty.';
+      return tUi('fileTree.empty.trash');
     default:
       return emptyRootLabel;
   }
