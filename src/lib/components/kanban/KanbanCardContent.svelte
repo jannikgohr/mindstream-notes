@@ -202,7 +202,10 @@
       class="kanban-card-linked-note"
       class:kanban-card-linked-note-missing={!linkedNote || linkedNote.trashed}
       aria-label={tUi('editor.kanban.openLinkedNote')}
-      use:tooltip={linkedNote?.title ?? tUi('editor.kanban.missingLinkedNote')}
+      title={linkedNote && !linkedNote.trashed
+        ? undefined
+        : (linkedNote?.title ?? tUi('editor.kanban.missingLinkedNote'))}
+      use:tooltip={linkedNote && !linkedNote.trashed ? linkedNote.title : null}
       onpointerdown={openLinkedNote}
       onclick={openLinkedNote}
       disabled={!linkedNote || linkedNote.trashed}
