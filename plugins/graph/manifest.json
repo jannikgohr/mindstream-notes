@@ -29,7 +29,8 @@
           {
             "id": "open-graph",
             "labelKey": "action.openGraph",
-            "icon": "icons/graph.svg"
+            "icon": "icons/open-tab.svg",
+            "inline": true
           }
         ]
       }

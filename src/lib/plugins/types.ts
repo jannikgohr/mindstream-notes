@@ -562,6 +562,11 @@ export interface PluginSidebarViewAction {
   id: string;
   labelKey: string;
   icon: string;
+  /**
+   * Draw it as an icon at the end of the view's own navigation entry, while
+   * that entry is selected, rather than in the row above the navigation.
+   */
+  inline?: boolean;
 }
 
 /**
