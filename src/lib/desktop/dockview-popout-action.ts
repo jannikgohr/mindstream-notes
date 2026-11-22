@@ -101,6 +101,8 @@ export class PopoutHeaderAction implements IHeaderActionsRenderer {
   private setStatusNoteId(noteId: string | null): void {
     if (this.statusNoteId === noteId) return;
     this.statusNoteId = noteId;
+    // Only a note pops out; a plugin tab view has none.
+    this.btn.hidden = noteId === null;
     if (this.statusInstance) {
       void unmount(this.statusInstance);
       this.statusInstance = null;

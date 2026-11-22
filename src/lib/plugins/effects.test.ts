@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   createNoteFromNote: vi.fn(async () => 'note-copy'),
   pushToast: vi.fn(),
   openPluginMenu: vi.fn(),
+  openTabView: vi.fn(),
   // plugin id -> granted permissions
   perms: {} as Record<string, string[]>,
   // stored note_kind string -> owning plugin ref (undefined = unknown kind)
@@ -68,13 +69,20 @@ vi.mock('./registry.svelte', () => ({
       permissions: h.perms[id] ?? [],
       contributes: {
         settings: [
-          { sectionId: 's', titleKey: 't', settings: [{ id: 'source-folder' }] }
+          {
+            sectionId: 's',
+            titleKey: 't',
+            settings: [{ id: 'source-folder' }]
+          }
         ]
       }
     }
   }),
-  pluginNoteKind: (noteKind: string) => h.noteKinds[noteKind]
+  pluginNoteKind: (noteKind: string) => h.noteKinds[noteKind],
+  pluginTabView: (pluginId: string, viewId: string) =>
+    viewId === 'graph' ? { pluginId, view: { id: viewId } } : undefined
 }));
+vi.mock('./tab-views', () => ({ openTabView: h.openTabView }));
 
 import {
   menuItemFromPluginEffect,
@@ -236,6 +244,18 @@ describe('runPluginEffect', () => {
       { defaultParentId: 'f1' }
     );
     expect(h.createNoteIn).toHaveBeenCalledWith('f1', 'Day', 'markdown');
+  });
+
+  it('opens only a tab view the plugin itself contributes', async () => {
+    expect(
+      parsePluginEffect({ effect: 'openTabView', viewId: 'graph' })
+    ).toEqual({ effect: 'openTabView', viewId: 'graph' });
+    expect(parsePluginEffect({ effect: 'openTabView' })).toBeNull();
+    await runPluginEffect('p1', { effect: 'openTabView', viewId: 'graph' });
+    expect(h.openTabView).toHaveBeenCalledWith('p1', 'graph');
+    await expect(
+      runPluginEffect('p1', { effect: 'openTabView', viewId: 'other' })
+    ).rejects.toThrow(/no tab view "other"/);
   });
 
   it('runs toast + insertMarkdown without a permission', async () => {

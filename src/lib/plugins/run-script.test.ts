@@ -90,6 +90,7 @@ afterEach(() => {
 
 it('runs every bundled Wasm plugin', () => {
   expect(bundledWasmManifests().map((m) => (m as { id: string }).id)).toEqual([
+    'com.mindstream.graph',
     JOURNAL,
     TEMPLATES,
     TYPST

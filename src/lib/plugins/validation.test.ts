@@ -8,6 +8,7 @@ import type { PluginManifest } from './types';
 import typstManifest from '../../../plugins/typst/manifest.json';
 import languagetoolManifest from '../../../plugins/languagetool/manifest.json';
 import templatesManifest from '../../../plugins/templates/manifest.json';
+import graphManifest from '../../../plugins/graph/manifest.json';
 import journalManifest from '../../../plugins/journal/manifest.json';
 
 /** A minimal manifest that passes validation; override to probe failures. */
@@ -1140,7 +1141,7 @@ describe('validateManifest', () => {
         ];
       });
     expect(() => validateManifest(view({}))).toThrow(
-      /not a supported sidebar view renderer/
+      /not a supported view renderer/
     );
     expect(() => validateManifest(view({ icon: '../x.svg' }))).toThrow(
       /safe relative \.svg path/
@@ -1155,6 +1156,37 @@ describe('validateManifest', () => {
         })
       )
     ).toThrow(/duplicate sidebar view action id/);
+  });
+
+  it('checks tab views like sidebar views and needs a scripted runtime for them', () => {
+    const tab = (view: Record<string, unknown>, runtime = 'wasm') => ({
+      ...withContributes((c) => {
+        c.tabViews = [
+          {
+            id: 'graph',
+            labelKey: 'tab.label',
+            icon: 'icons/graph.svg',
+            render: { type: 'schema', render: 'renderTab', onEvent: 'onEvent' },
+            ...view
+          }
+        ];
+      }),
+      runtime,
+      ...(runtime === 'wasm' ? { entry: 'plugin.wasm' } : {})
+    });
+    expect(() => validateManifest(tab({}))).not.toThrow();
+    expect(() => validateManifest(tab({ render: { type: 'nope' } }))).toThrow(
+      /tabViews\[0\]\.render\.type .* not a supported view renderer/
+    );
+    expect(() => validateManifest(tab({}, 'manifest-only'))).toThrow(
+      /tab views/
+    );
+  });
+
+  it('accepts the shipped Graph manifest', () => {
+    expect(
+      validateManifest(structuredClone(graphManifest)).contributes.tabViews
+    ).toHaveLength(1);
   });
 
   it('rejects an unsupported command action', () => {

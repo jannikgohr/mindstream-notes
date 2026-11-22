@@ -51,6 +51,7 @@ import {
   type PluginSettingsContribution,
   type PluginCommandContribution,
   type PluginSidebarViewContribution,
+  type PluginTabViewContribution,
   type PluginTemplateVariable,
   type PluginToolbarButton,
   type PluginToolbarLocation,
@@ -1028,6 +1029,14 @@ function validateSetting(
       );
     }
   }
+  for (const bound of ['min', 'max', 'step'] as const) {
+    if (s[bound] !== undefined && !Number.isFinite(s[bound])) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.${bound} must be a number`
+      );
+    }
+  }
   if (s.optionLabelKeys !== undefined) {
     if (!s.optionLabelKeys || typeof s.optionLabelKeys !== 'object') {
       throw new PluginValidationError(
@@ -1323,6 +1332,12 @@ function validateSidebarView(
     assertSlug(pluginId, action?.id, `${path}.actions[${i}].id`);
     assertI18nKey(pluginId, action.labelKey, `${path}.actions[${i}].labelKey`);
     assertSvgPath(pluginId, action.icon, `${path}.actions[${i}].icon`);
+    if (action.inline !== undefined && typeof action.inline !== 'boolean') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.actions[${i}].inline must be true or false`
+      );
+    }
     if (seen.has(action.id)) {
       throw new PluginValidationError(
         pluginId,
@@ -1331,6 +1346,17 @@ function validateSidebarView(
     }
     seen.add(action.id);
   }
+  validateSidebarViewRender(pluginId, v.render, `${path}.render`);
+}
+
+function validateTabView(
+  pluginId: string,
+  v: PluginTabViewContribution,
+  path: string
+): void {
+  assertSlug(pluginId, v?.id, `${path}.id`);
+  assertI18nKey(pluginId, v.labelKey, `${path}.labelKey`);
+  assertSvgPath(pluginId, v.icon, `${path}.icon`);
   validateSidebarViewRender(pluginId, v.render, `${path}.render`);
 }
 
@@ -1347,7 +1373,7 @@ function validateSidebarViewRender(
   }
   throw new PluginValidationError(
     pluginId,
-    `${path}.type ("${String(r?.type)}") is not a supported sidebar view renderer`
+    `${path}.type ("${String(r?.type)}") is not a supported view renderer`
   );
 }
 
@@ -2040,6 +2066,20 @@ export function validateManifest(input: unknown): PluginManifest {
     throw new PluginValidationError(
       pluginId,
       'contributes sidebar views, which run backend script exports and require a scripted runtime ("wasm")'
+    );
+  }
+
+  // ---- Tab views --------------------------------------------------------
+  const tabViews = contributionList(contributes.tabViews, 'tabViews');
+  const seenTabViewIds = new Set<string>();
+  for (const [i, v] of tabViews.entries()) {
+    validateTabView(pluginId, v, `tabViews[${i}]`);
+    claimId(seenTabViewIds, v.id, 'tab view id');
+  }
+  if (tabViews.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes tab views, which run backend script exports and require a scripted runtime ("wasm")'
     );
   }
 

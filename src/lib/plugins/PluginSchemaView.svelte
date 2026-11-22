@@ -14,14 +14,17 @@
   import { Button } from '$lib/components/ui/button';
   import { i18n } from '$lib/settings/i18n.svelte';
   import { getSettingValue } from '$lib/settings/store.svelte';
+  import { ui } from '$lib/state.svelte';
   import { tree } from '$lib/stores/tree.svelte';
   import { parsePluginEffect, runPluginEffect } from './effects';
   import { buildPluginContext } from './plugin-ctx';
   import PluginIcon from './PluginIcon.svelte';
-  import { pluginById, type PluginSidebarViewRef } from './registry.svelte';
+  import { pluginById } from './registry.svelte';
   import { runPluginScript } from './run-script';
   import SchemaCalendar from './SchemaCalendar.svelte';
+  import SchemaGraph from './SchemaGraph.svelte';
   import { onSidebarViewAction } from './sidebar-views';
+  import type { PluginViewRender } from './types';
   import {
     parseViewNode,
     viewText,
@@ -29,11 +32,22 @@
     type ViewNode
   } from './view-schema';
 
-  let { ref, source }: { ref: PluginSidebarViewRef; source: string } = $props();
+  let {
+    ref,
+    source,
+    tab = false
+  }: {
+    ref: { pluginId: string; view: { render: PluginViewRender } };
+    source: string;
+    /** Drawn as a main-area tab rather than in the sidebar. */
+    tab?: boolean;
+  } = $props();
 
   const pluginId = $derived(ref.pluginId);
   const render = $derived(ref.view.render);
-  let view = $state<ViewNode | null>(null);
+  // Raw: a graph view holds tens of thousands of nodes, and deep state would
+  // wrap each one in a proxy.
+  let view = $state.raw<ViewNode | null>(null);
   let failure = $state<string | null>(null);
   let queue: Promise<void> = Promise.resolve();
   let destroyed = false;
@@ -53,7 +67,9 @@
   function enqueue(task: () => Promise<void>) {
     queue = queue.then(task).catch((err) => {
       console.error('[plugins] sidebar view failed', pluginId, err);
-      failure = err instanceof Error ? err.message : String(err);
+      // A failed command arrives as `{ code, message }`, not as an Error.
+      const message = (err as { message?: unknown } | null)?.message;
+      failure = typeof message === 'string' ? message : String(err);
     });
   }
 
@@ -85,7 +101,8 @@
     });
   }
 
-  // What a render reads from: notes, the plugin's settings and the locale.
+  // What a render reads from: notes, the plugin's settings, the active note
+  // and the locale.
   let redrawTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     for (const note of Object.values(tree.notesById)) {
@@ -94,11 +111,16 @@
       void note.parent_collection_id;
       void note.trashed;
     }
+    for (const folder of Object.values(tree.collectionsById)) {
+      void folder.name;
+      void folder.parent_collection_id;
+    }
     const sections = pluginById(pluginId)?.manifest.contributes.settings ?? [];
     for (const setting of sections.flatMap((s) => s.settings)) {
       void getSettingValue(`plugins.${pluginId}.${setting.id}`);
     }
     void i18n.language;
+    void ui.activeNoteId;
     if (redrawTimer) clearTimeout(redrawTimer);
     // Untracked: a redraw sets `view`, which must not schedule another.
     const delay = untrack(() => (view ? 150 : 0));
@@ -116,18 +138,31 @@
 </script>
 
 <div
-  class="themed-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-3"
+  class="themed-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto {tab
+    ? 'h-full p-3'
+    : 'px-3 pb-3'}"
   data-plugin-view={source}
 >
   {#if failure}
     <p class="px-1 py-3 text-xs text-destructive">{failure}</p>
   {/if}
-  {#if view}{@render node(view)}{/if}
+  {#if view?.type === 'text'}
+    <!-- A view that is one line of text has nothing else to show: it says
+         so in the middle, like an empty list does. -->
+    <p
+      class="m-auto max-w-56 px-2 py-6 text-center text-xs {view.tone ===
+      'accent'
+        ? 'text-accent-brand'
+        : 'text-muted-foreground'}"
+    >
+      {viewText(pluginId, view.text)}
+    </p>
+  {:else if view}{@render node(view)}{/if}
 </div>
 
 {#snippet node(n: ViewNode)}
   {#if n.type === 'stack'}
-    <div class="flex flex-col">
+    <div class="flex min-h-0 flex-1 flex-col">
       {#each n.children as child, i (i)}{@render node(child)}{/each}
     </div>
   {:else if n.type === 'heading'}
@@ -161,6 +196,13 @@
       {pluginId}
       node={n}
       onEvent={(event, value) => dispatch({ event }, value)}
+    />
+  {:else if n.type === 'graph'}
+    <SchemaGraph
+      {pluginId}
+      node={n}
+      onEvent={(event, value) => dispatch({ event }, value)}
+      onAction={dispatch}
     />
   {:else if n.type === 'list'}
     <ul class="flex flex-col text-[13px]">

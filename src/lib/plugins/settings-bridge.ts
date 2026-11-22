@@ -37,6 +37,7 @@ import {
   resolvePluginString,
   resolvePluginStringOptional
 } from './plugin-i18n';
+import { isPresetSetting } from './setting-presets';
 import type { PluginSetting, PluginSettingsContribution } from './types';
 
 /** The synthetic category id under which all plugin settings are grouped. */
@@ -58,6 +59,9 @@ function toCoreSetting(pluginId: string, s: PluginSetting): Setting {
   };
   if (s.default !== undefined) base.default = s.default;
   if (s.options) base.options = s.options;
+  for (const bound of ['min', 'max', 'step'] as const) {
+    if (s[bound] !== undefined) base[bound] = s[bound];
+  }
   return base as unknown as Setting;
 }
 
@@ -130,7 +134,11 @@ export function pluginSettingsSectionsFor(pluginId: string): Section[] {
 /** Resolve a full plugin setting id to a core `Setting`, if it exists. */
 export function pluginSettingDef(id: string): Setting | undefined {
   const entry = settingIndex().get(id);
-  return entry ? toCoreSetting(entry.pluginId, entry.setting) : undefined;
+  if (entry) return toCoreSetting(entry.pluginId, entry.setting);
+  // Every plugin's presets are kept with its vault settings.
+  if (isPresetSetting(parsePluginSettingId(id)?.settingId))
+    return { id, scope: 'V', type: 'text' } as Setting;
+  return undefined;
 }
 
 /**

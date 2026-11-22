@@ -38,6 +38,7 @@
   import PluginSidebarView from '$lib/plugins/PluginSidebarView.svelte';
   import { resolvePluginString } from '$lib/plugins/plugin-i18n';
   import { pluginSidebarViews } from '$lib/plugins/registry.svelte';
+  import type { PluginSidebarViewRef } from '$lib/plugins/registry.svelte';
   import {
     sendSidebarViewAction,
     sidebarViewForSource,
@@ -993,7 +994,7 @@
         onNewSharedFolder={() => startDraft('folder', null)}
       />
     {:else if pluginView}
-      {#each pluginView.view.actions ?? [] as action, i (action.id)}
+      {#each (pluginView.view.actions ?? []).filter((action) => !action.inline) as action, i (action.id)}
         {@const label = resolvePluginString(
           pluginView.pluginId,
           action.labelKey
@@ -1042,7 +1043,8 @@
           {@render navButton(
             sidebarViewSource(ref.pluginId, ref.view.id),
             resolvePluginString(ref.pluginId, ref.view.labelKey),
-            viewIcon
+            viewIcon,
+            ref
           )}
         {/each}
       {/if}
@@ -1115,22 +1117,55 @@
 {#snippet navButton(
   id: DesktopNoteSource,
   label: string,
-  icon: import('svelte').Snippet
+  icon: import('svelte').Snippet,
+  view?: PluginSidebarViewRef
 )}
   {@const active = source === id}
-  <button
-    type="button"
-    class="inline-flex h-8 min-w-0 shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
-      ? 'bg-accent-brand/10 font-medium text-accent-brand'
-      : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
-    use:tooltip={active ? undefined : label}
-    aria-current={active ? 'page' : undefined}
-    aria-label={label}
-    onclick={() => onSourceChange?.(id)}
-  >
-    {@render icon()}
-    <span class="truncate">{label}</span>
-  </button>
+  <!-- A selected plugin view's inline actions sit at the end of its entry. -->
+  {@const inline = active
+    ? (view?.view.actions ?? []).filter((action) => action.inline)
+    : []}
+  <div class="relative flex min-w-0 shrink-0">
+    <button
+      type="button"
+      class="inline-flex h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors {active
+        ? 'bg-accent-brand/10 font-medium text-accent-brand'
+        : 'text-muted-foreground hover:bg-accent hover:text-foreground'}"
+      style:padding-right={inline.length
+        ? `${inline.length * 1.75 + 0.25}rem`
+        : undefined}
+      use:tooltip={active ? undefined : label}
+      aria-current={active ? 'page' : undefined}
+      aria-label={label}
+      onclick={() => onSourceChange?.(id)}
+    >
+      {@render icon()}
+      <span class="truncate">{label}</span>
+    </button>
+    {#if view && inline.length}
+      <div class="absolute inset-y-0 right-1 flex items-center">
+        {#each inline as action (action.id)}
+          {@const actionLabel = resolvePluginString(
+            view.pluginId,
+            action.labelKey
+          )}
+          <button
+            type="button"
+            class="grid size-6 place-items-center rounded-md text-accent-brand transition-colors hover:bg-accent-brand/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            use:tooltip={actionLabel}
+            aria-label={actionLabel}
+            onclick={() => sendSidebarViewAction(id, action.id)}
+          >
+            <PluginIcon
+              pluginId={view.pluginId}
+              file={action.icon}
+              class="size-3.5 shrink-0"
+            />
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
 {/snippet}
 
 <input

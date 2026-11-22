@@ -1,4 +1,10 @@
-import { loadNote, type Note, type NoteSummary } from '$lib/api';
+import {
+  listNoteLinks,
+  loadNote,
+  type Note,
+  type NoteLinks,
+  type NoteSummary
+} from '$lib/api';
 import { parseNoteHref } from '$lib/editor/plugins/wikilink-href';
 
 export interface NoteRelations {
@@ -7,6 +13,12 @@ export interface NoteRelations {
 }
 
 type NoteLoader = (id: string) => Promise<Pick<Note, 'body'>>;
+type LinkLister = () => Promise<NoteLinks[]>;
+
+// Past this many notes to read, one read of every note's links is cheaper
+// than loading each body.
+const BULK_READ_AFTER = 20;
+let pendingBulkLoad: Promise<void> | null = null;
 
 const linkCache = new Map<string, { modified: string; targetIds: string[] }>();
 const pendingLinkLoads = new Map<string, Promise<string[]>>();
@@ -48,27 +60,53 @@ async function linksForNote(
   return load;
 }
 
+function bulkLoad(lister: LinkLister): Promise<void> {
+  pendingBulkLoad ??= lister()
+    .then((all) => {
+      for (const { id, modified, targets } of all)
+        linkCache.set(id, { modified, targetIds: targets });
+    })
+    .catch((error) => console.warn('[links] bulk read failed', error))
+    .finally(() => (pendingBulkLoad = null));
+  return pendingBulkLoad;
+}
+
+/** Every live note's links to other live notes, by source note ID. */
+export async function loadNoteLinks(
+  summaries: NoteSummary[],
+  loader: NoteLoader = loadNote,
+  lister: LinkLister = listNoteLinks
+): Promise<Map<string, string[]>> {
+  const liveNotes = summaries.filter((note) => !note.trashed);
+  const knownIds = new Set(liveNotes.map((note) => note.id));
+  const candidates = liveNotes.filter((note) =>
+    canContainNoteLinks(note.note_kind)
+  );
+  const stale = (note: NoteSummary) =>
+    linkCache.get(note.id)?.modified !== note.modified;
+  if (candidates.filter(stale).length > BULK_READ_AFTER) await bulkLoad(lister);
+  // Whatever the bulk read missed, or changed since, loads one by one.
+  await Promise.all(
+    candidates.filter(stale).map((note) => linksForNote(note, loader))
+  );
+  return new Map(
+    candidates.map((note) => [
+      note.id,
+      (linkCache.get(note.id)?.targetIds ?? []).filter((id) => knownIds.has(id))
+    ])
+  );
+}
+
 /** Build outgoing links and backlinks for one note from the current vault. */
 export async function loadNoteRelations(
   noteId: string,
   summaries: NoteSummary[],
   loader: NoteLoader = loadNote
 ): Promise<NoteRelations> {
-  const liveNotes = summaries.filter((note) => !note.trashed);
-  const candidates = liveNotes.filter((note) =>
-    canContainNoteLinks(note.note_kind)
-  );
-  const knownIds = new Set(liveNotes.map((note) => note.id));
-  const links = await Promise.all(
-    candidates.map(
-      async (note) => [note.id, await linksForNote(note, loader)] as const
-    )
-  );
-  const bySource = new Map(links);
-
+  const links = await loadNoteLinks(summaries, loader);
   return {
-    outgoing: (bySource.get(noteId) ?? []).filter((id) => knownIds.has(id)),
-    backlinks: links
+    outgoing: links.get(noteId) ?? [],
+    backlinks: [...links]
       .filter(
         ([sourceId, targetIds]) =>
           sourceId !== noteId && targetIds.includes(noteId)
@@ -79,5 +117,6 @@ export async function loadNoteRelations(
 
 export function clearNoteRelationsCache(): void {
   linkCache.clear();
+  pendingBulkLoad = null;
   pendingLinkLoads.clear();
 }

@@ -12,7 +12,8 @@ import { setTemplateFolder } from './template-sources';
  * The plugin framework, driven through the browser-fallback SPA.
  *
  * Outside Tauri there is no backend discovery, so `loadPlugins()` registers the
- * bundled Wasm plugins, **Journal** (`com.mindstream.journal`), **Templates**
+ * bundled Wasm plugins, **Graph** (`com.mindstream.graph`), **Journal**
+ * (`com.mindstream.journal`), **Templates**
  * (`com.mindstream.templates.core`) and **Typst** (`com.mindstream.typst`),
  * from their manifests, and the page runs their shipped components. That is enough to prove the whole frontend
  * integration the unit suites can only test in isolation:
