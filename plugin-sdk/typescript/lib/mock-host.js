@@ -323,6 +323,18 @@ export function storageSegments(path, allowEmpty) {
 export function createMockHost(options = {}) {
   const granted = new Set(options.permissions ?? []);
   const utc = options.timeZone === 'UTC';
+  const queryDay = (s) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s))
+      refuse('invalid', `notes.query: '${s}' is not a YYYY-MM-DD day`);
+    return s;
+  };
+  const localDay = (ts) => {
+    try {
+      return formatDate(parseTimestamp(ts), 'YYYY-MM-DD', 'en', utc);
+    } catch {
+      return '';
+    }
+  };
   const fixedNow =
     options.now === undefined ? undefined : new Date(options.now).getTime();
   const nowMs = () => fixedNow ?? Date.now();
@@ -391,6 +403,48 @@ export function createMockHost(options = {}) {
         need('notes.read');
         const note = notes.find((n) => n.id === id);
         return note ? toNote(note) : undefined;
+      },
+      query({ folder, days, titles, limit }) {
+        need('notes.read');
+        const range = days ? [queryDay(days.first), queryDay(days.last)] : null;
+        const inside = (d) => d !== '' && range[0] <= d && d <= range[1];
+        const matches = notes.map(toNote).flatMap((note) => {
+          if (titles && !titles.includes(note.title)) return [];
+          if (folder?.tag === 'root' && note.folderId !== undefined) return [];
+          if (folder?.tag === 'folder' && note.folderId !== folder.val)
+            return [];
+          const createdDay = localDay(note.created);
+          const modifiedDay = localDay(note.modified);
+          if (range && !inside(createdDay) && !inside(modifiedDay)) return [];
+          return [{ note, createdDay, modifiedDay }];
+        });
+        // Newest edit first; unparseable times last.
+        const time = (d) => {
+          try {
+            return parseTimestamp(d.note.modified).getTime();
+          } catch {
+            return -Infinity;
+          }
+        };
+        matches.sort((a, b) => time(b) - time(a) || 0);
+        return limit === undefined || limit === null
+          ? matches
+          : matches.slice(0, limit);
+      },
+      countByDay({ first, last }) {
+        need('notes.read');
+        const range = [queryDay(first), queryDay(last)];
+        const inside = (d) => d !== '' && range[0] <= d && d <= range[1];
+        const counts = new Map();
+        for (const note of notes.map(toNote)) {
+          const created = localDay(note.created);
+          const modified = localDay(note.modified);
+          for (const day of new Set([created, modified]))
+            if (inside(day)) counts.set(day, (counts.get(day) ?? 0) + 1);
+        }
+        return [...counts]
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+          .map(([day, count]) => ({ day, notes: count }));
       }
     },
     'mindstream:plugin/storage@0.1.0': {
