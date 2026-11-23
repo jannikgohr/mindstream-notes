@@ -4317,6 +4317,50 @@ pub(crate) fn window_state(app: &AppHandle) -> AppResult<crate::vault_window_sta
     serde_json::from_value(reply).map_err(|_| invalid())
 }
 
+/// Closing the main window hides it to keep the app in the tray (or Dock),
+/// but only for the last open vault. With another vault open, hiding would
+/// leave this one running with no way to close it, so it closes instead.
+pub(crate) fn hide_unless_another_vault_is_open(app: &AppHandle) {
+    fn hide(app: &AppHandle) {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+        crate::webview_memory::sync_to_visibility(app);
+    }
+    let Some(worker) = app.try_state::<Worker>() else {
+        hide(app);
+        return;
+    };
+    let vault_id = worker.vault_id.clone();
+    let handle = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("vault-close".into())
+        .spawn(move || {
+            let another_open = window_state(&handle)
+                .map(|view| {
+                    view.vaults.iter().any(|entry| {
+                        entry.vault_id != vault_id
+                            && entry.status != crate::vault_window_state::Status::Unavailable
+                    })
+                })
+                .unwrap_or_else(|error| {
+                    log::warn!("[vaults] open vaults unknown; hiding the window: {error}");
+                    false
+                });
+            let app = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                if another_open {
+                    crate::worker_shutdown::request_close(&app);
+                } else {
+                    hide(&app);
+                }
+            });
+        });
+    if spawned.is_err() {
+        hide(app);
+    }
+}
+
 pub(crate) fn check_update(
     app: &AppHandle,
     force: bool,

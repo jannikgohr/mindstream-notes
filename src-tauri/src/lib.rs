@@ -274,17 +274,15 @@ pub fn run() {
             if window.label() == "main" {
                 match event {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
                         let app_handle = window.app_handle();
                         if desktop_settings::should_close_to_tray(app_handle)
                             || cfg!(target_os = "macos")
                         {
-                            api.prevent_close();
-                            let _ = window.hide();
-                            webview_memory::sync_to_visibility(app_handle);
-                            return;
+                            vault_supervisor::hide_unless_another_vault_is_open(app_handle);
+                        } else {
+                            worker_shutdown::request_close(app_handle);
                         }
-                        api.prevent_close();
-                        worker_shutdown::request_close(app_handle);
                     }
                     // An unloaded window is built again on demand; the worker
                     // goes on syncing without it.
