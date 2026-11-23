@@ -9,11 +9,10 @@
 //! The hit returned to the frontend carries a short body snippet around the
 //! first body match (or the leading body chars for title-only hits), cut
 //! from the body's reading text rather than its Markdown source, plus
-//! char-index ranges for the title + snippet matches so the UI can highlight
-//! them without reimplementing the matcher in JS. Char indices line up with
-//! JavaScript `String#slice` semantics (which counts UTF-16 code units, not
-//! bytes); on the dominant Basic Multilingual Plane characters the two
-//! agree, so the UI can slice directly.
+//! ranges for the title + snippet matches so the UI can highlight them
+//! without reimplementing the matcher in JS. The ranges count UTF-16 code
+//! units, as JavaScript `String#slice` does, so the UI can slice directly
+//! even past an emoji.
 
 use std::sync::OnceLock;
 
@@ -180,10 +179,25 @@ pub fn rank_candidates(pool: Vec<Candidate>, terms: &[Vec<char>]) -> Vec<SearchH
 
 fn lowercase_chars(s: &str) -> Vec<char> {
     // `flat_map(char::to_lowercase)` handles per-char case folding (incl.
-    // German ß → "ss", Greek Σ → σ/ς) at the cost of a possible char-count
-    // change vs. the original. For highlight positioning we accept that —
-    // a mis-aligned range is rare and visually localised.
+    // Greek Σ → σ/ς), and may give more chars than it was given (İ → i̇).
     s.chars().flat_map(|c| c.to_lowercase()).collect()
+}
+
+/// `lowercase_chars(s)`, with the UTF-16 span in `s` of the char each one
+/// was folded from.
+fn lowercase_chars_with_spans(s: &str) -> (Vec<char>, Vec<(usize, usize)>) {
+    let mut lower = Vec::with_capacity(s.len());
+    let mut spans = Vec::with_capacity(s.len());
+    let mut at = 0;
+    for c in s.chars() {
+        let end = at + c.len_utf16();
+        for folded in c.to_lowercase() {
+            lower.push(folded);
+            spans.push((at, end));
+        }
+        at = end;
+    }
+    (lower, spans)
 }
 
 fn contains_subslice(haystack: &[char], needle: &[char]) -> bool {
@@ -193,14 +207,13 @@ fn contains_subslice(haystack: &[char], needle: &[char]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
-/// Return the char-index ranges of every term match in `haystack`,
-/// case-insensitively. The ranges are valid as `String#slice` arguments
-/// in JavaScript (char/code-unit indices for BMP chars).
+/// Return the ranges of every term match in `haystack`, case-insensitively,
+/// in UTF-16 code units: valid as JavaScript `String#slice` arguments.
 fn find_matches(haystack: &str, terms: &[Vec<char>]) -> Vec<MatchRange> {
     if terms.is_empty() || haystack.is_empty() {
         return Vec::new();
     }
-    let lower_chars = lowercase_chars(haystack);
+    let (lower_chars, spans) = lowercase_chars_with_spans(haystack);
     let mut raw: Vec<(usize, usize)> = Vec::new();
     for term in terms {
         if term.is_empty() || term.len() > lower_chars.len() {
@@ -209,7 +222,7 @@ fn find_matches(haystack: &str, terms: &[Vec<char>]) -> Vec<MatchRange> {
         let mut i = 0usize;
         while i + term.len() <= lower_chars.len() {
             if lower_chars[i..i + term.len()] == term[..] {
-                raw.push((i, i + term.len()));
+                raw.push((spans[i].0, spans[i + term.len() - 1].1));
                 i += term.len();
             } else {
                 i += 1;
@@ -435,14 +448,14 @@ fn build_snippet(body: &str, terms: &[Vec<char>]) -> (String, Vec<MatchRange>) {
     } else {
         ""
     };
-    let prefix_chars: usize = prefix.chars().count();
+    let prefix_units = prefix.encode_utf16().count();
 
     let inner_matches = find_matches(&snippet, terms);
     let shifted: Vec<MatchRange> = inner_matches
         .into_iter()
         .map(|m| MatchRange {
-            start: m.start + prefix_chars,
-            end: m.end + prefix_chars,
+            start: m.start + prefix_units,
+            end: m.end + prefix_units,
         })
         .collect();
 
@@ -464,4 +477,28 @@ fn collapse_whitespace(s: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn highlighted(text: &str, query: &str) -> Vec<String> {
+        let terms: Vec<Vec<char>> = query
+            .split_whitespace()
+            .map(|t| t.to_lowercase().chars().collect())
+            .collect();
+        let units: Vec<u16> = text.encode_utf16().collect();
+        find_matches(text, &terms)
+            .iter()
+            .map(|m| String::from_utf16(&units[m.start..m.end]).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn match_ranges_count_utf16_units() {
+        assert_eq!(highlighted("🎉 Party plans", "party"), ["Party"]);
+        assert_eq!(highlighted("Fun 🎉🎉 times", "🎉"), ["🎉🎉"]);
+        assert_eq!(highlighted("İstanbul trip", "trip"), ["trip"]);
+    }
 }
