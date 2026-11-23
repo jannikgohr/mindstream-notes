@@ -1608,7 +1608,7 @@
     },
     "general.closeToTray": {
       "label": "Close to system tray",
-      "description": "Hide the main window instead of quitting when you close it."
+      "description": "Closing the last open vault hides its window instead of quitting. With other vaults open, closing a window closes its vault."
     },
     "general.startInTray": {
       "label": "Start in system tray",
