@@ -125,10 +125,7 @@ async function openVault(): Promise<BrowserStorageClient> {
     const failure = storageError(error);
     if (failure.code === 'databaseBusy') {
       reloadWhenVaultFree(vaultNamespace(testId).lock);
-      throw {
-        ...failure,
-        message: `${failure.message} This tab opens it once that one closes.`
-      };
+      throw { ...failure, message: tUi('browser.vaultBusy') };
     }
     throw error;
   }
