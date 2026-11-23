@@ -1,6 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sortTree } from './sort';
-import type { NoteSummary, TreeNode } from './api';
+import type { Collection, NoteSummary, TreeNode } from './api';
+
+const settings = vi.hoisted(() => ({ foldersFirst: true }));
+vi.mock('$lib/settings/store.svelte', () => ({
+  getSettingValue: (id: string) =>
+    id === 'appearance.foldersFirst' ? settings.foldersFirst : undefined
+}));
 
 const note = (
   id: string,
@@ -50,7 +56,10 @@ describe('sortTree', () => {
       noteNode('n2', 'apple'),
       folder('f2', 'alpha')
     ];
-    const out = sortTree(tree, 'alphabetical', { notesById: {} });
+    const out = sortTree(tree, 'alphabetical', {
+      notesById: {},
+      collectionsById: {}
+    });
     expect(out.map((n) => n.kind)).toEqual([
       'folder',
       'folder',
@@ -65,12 +74,16 @@ describe('sortTree', () => {
       noteNode('n2', 'Apple'),
       noteNode('n3', 'cherry')
     ];
-    const out = sortTree(tree, 'alphabetical', { notesById: {} });
+    const out = sortTree(tree, 'alphabetical', {
+      notesById: {},
+      collectionsById: {}
+    });
     expect(out.map((n) => n.name)).toEqual(['Apple', 'banana', 'cherry']);
   });
 
   it('modified asc: oldest first by note timestamp', () => {
     const ctx = {
+      collectionsById: {},
       notesById: {
         n1: note('n1', 'old', '2020-01-01T00:00:00Z'),
         n2: note('n2', 'new', '2024-06-01T00:00:00Z'),
@@ -88,6 +101,7 @@ describe('sortTree', () => {
 
   it('modified desc: newest first by note timestamp', () => {
     const ctx = {
+      collectionsById: {},
       notesById: {
         n1: note('n1', 'old', '2020-01-01T00:00:00Z'),
         n2: note('n2', 'new', '2024-06-01T00:00:00Z'),
@@ -105,6 +119,7 @@ describe('sortTree', () => {
 
   it('created asc: oldest-created first, independent of modified time', () => {
     const ctx = {
+      collectionsById: {},
       notesById: {
         // Modified order is deliberately the reverse of created order to
         // prove the strategy reads `created`, not `modified`.
@@ -124,6 +139,7 @@ describe('sortTree', () => {
 
   it('created desc: newest-created first', () => {
     const ctx = {
+      collectionsById: {},
       notesById: {
         n1: note('n1', 'first', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
         n2: note('n2', 'third', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'),
@@ -143,7 +159,12 @@ describe('sortTree', () => {
     // Two folders under the `created` strategy exercise the non-note guard
     // in the comparator (folders have no created timestamp).
     const tree: TreeNode[] = [folder('f2', 'zeta'), folder('f1', 'alpha')];
-    const out = sortTree(tree, 'created', { notesById: {} }, 'asc');
+    const out = sortTree(
+      tree,
+      'created',
+      { notesById: {}, collectionsById: {} },
+      'asc'
+    );
     expect(out.map((n) => n.name)).toEqual(['alpha', 'zeta']);
   });
 
@@ -153,7 +174,12 @@ describe('sortTree', () => {
       noteNode('n2', 'Apple'),
       noteNode('n3', 'cherry')
     ];
-    const out = sortTree(tree, 'alphabetical', { notesById: {} }, 'desc');
+    const out = sortTree(
+      tree,
+      'alphabetical',
+      { notesById: {}, collectionsById: {} },
+      'desc'
+    );
     expect(out.map((n) => n.name)).toEqual(['cherry', 'banana', 'Apple']);
   });
 
@@ -161,10 +187,44 @@ describe('sortTree', () => {
     const tree: TreeNode[] = [
       folder('f1', 'work', [noteNode('a', 'b'), noteNode('b', 'a')])
     ];
-    const out = sortTree(tree, 'alphabetical', { notesById: {} });
+    const out = sortTree(tree, 'alphabetical', {
+      notesById: {},
+      collectionsById: {}
+    });
     const f = out[0] as TreeNode & { children: TreeNode[] };
     expect((f as { children: TreeNode[] }).children.map((n) => n.name)).toEqual(
       ['a', 'b']
     );
+  });
+
+  it('modified: keeps notes in date order among folders when folders mix in', () => {
+    settings.foldersFirst = false;
+    try {
+      const collection = (id: string, modified: string): Collection => ({
+        id,
+        parent_collection_id: null,
+        name: id,
+        position: 0,
+        created: modified,
+        modified
+      });
+      const ctx = {
+        notesById: {
+          a: note('a', 'a', '2024-03-01T00:00:00Z'),
+          c: note('c', 'c', '2024-01-01T00:00:00Z')
+        },
+        collectionsById: { b: collection('b', '2024-02-01T00:00:00Z') }
+      };
+      for (const tree of [
+        [noteNode('a', 'a'), folder('b', 'b'), noteNode('c', 'c')],
+        [folder('b', 'b'), noteNode('c', 'c'), noteNode('a', 'a')],
+        [noteNode('c', 'c'), noteNode('a', 'a'), folder('b', 'b')]
+      ]) {
+        const out = sortTree(tree, 'modified', ctx, 'asc');
+        expect(out.map((n) => n.id)).toEqual(['c', 'b', 'a']);
+      }
+    } finally {
+      settings.foldersFirst = true;
+    }
   });
 });

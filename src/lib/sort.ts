@@ -9,8 +9,7 @@
  * the field (A→Z, oldest first, etc.); desc just negates that.
  */
 
-import type { NoteSummary } from './api';
-import type { TreeNode } from './api';
+import type { Collection, NoteSummary, TreeNode } from './api';
 import { getSettingValue } from '$lib/settings/store.svelte';
 
 export type SortStrategy = 'alphabetical' | 'modified' | 'created';
@@ -33,6 +32,7 @@ export const SORT_STRATEGIES: SortStrategyOption[] = [
 
 interface SortContext {
   notesById: Record<string, NoteSummary>;
+  collectionsById: Record<string, Collection>;
 }
 
 type Comparator = (a: TreeNode, b: TreeNode, ctx: SortContext) => number;
@@ -48,32 +48,34 @@ function alphabetical(a: TreeNode, b: TreeNode): number {
   });
 }
 
-function noteModified(node: TreeNode, ctx: SortContext): string {
-  if (node.kind !== 'note') return '';
-  return ctx.notesById[node.id]?.modified ?? '';
-}
-
-function noteCreated(node: TreeNode, ctx: SortContext): string {
-  if (node.kind !== 'note') return '';
-  return ctx.notesById[node.id]?.created ?? '';
+function timestamp(
+  node: TreeNode,
+  field: 'created' | 'modified',
+  ctx: SortContext
+): string {
+  const item =
+    node.kind === 'note'
+      ? ctx.notesById[node.id]
+      : ctx.collectionsById[node.id];
+  return item?.[field] ?? '';
 }
 
 /**
  * Comparators are written in *ascending* form: smaller comes first.
  * `sortTree` flips the sign when direction === 'desc'. Modified/created
  * compare ISO strings (which sort chronologically as plain strings), so
- * asc = oldest first, desc = newest first.
+ * asc = oldest first, desc = newest first. Folders compare by their own
+ * timestamps too: mixing in name order for them breaks transitivity.
  */
 const COMPARATORS: Record<SortStrategy, Comparator> = {
   alphabetical,
-  modified: (a, b, ctx) => {
-    if (a.kind !== 'note' || b.kind !== 'note') return alphabetical(a, b);
-    return noteModified(a, ctx).localeCompare(noteModified(b, ctx));
-  },
-  created: (a, b, ctx) => {
-    if (a.kind !== 'note' || b.kind !== 'note') return alphabetical(a, b);
-    return noteCreated(a, ctx).localeCompare(noteCreated(b, ctx));
-  }
+  modified: (a, b, ctx) =>
+    timestamp(a, 'modified', ctx).localeCompare(
+      timestamp(b, 'modified', ctx)
+    ) || alphabetical(a, b),
+  created: (a, b, ctx) =>
+    timestamp(a, 'created', ctx).localeCompare(timestamp(b, 'created', ctx)) ||
+    alphabetical(a, b)
 };
 
 export function sortTree(
