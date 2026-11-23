@@ -53,6 +53,60 @@ pub struct NoteMeta {
     pub modified: String,
 }
 
+/// Where a note query looks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderScope {
+    /// Notes outside every folder.
+    Root,
+    /// Notes directly inside this folder.
+    Folder(String),
+}
+
+/// A note a query matched, with its local created and modified days.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatedNote<'a> {
+    pub note: &'a NoteMeta,
+    /// `YYYY-MM-DD` in local time; empty for an unparseable timestamp.
+    pub created_day: String,
+    pub modified_day: String,
+}
+
+/// Filters a note query applies together. An absent filter matches every note.
+#[derive(Debug, Default)]
+pub struct NoteQuery<'a> {
+    pub folder: Option<&'a FolderScope>,
+    /// Notes created or last modified on a local day in this inclusive
+    /// `YYYY-MM-DD` range.
+    pub days: Option<(&'a str, &'a str)>,
+    pub titles: Option<&'a [String]>,
+    /// At most this many notes.
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug)]
+struct NoteDates {
+    modified: Option<chrono::DateTime<chrono::Local>>,
+    created_day: Option<chrono::NaiveDate>,
+    modified_day: Option<chrono::NaiveDate>,
+}
+
+impl NoteDates {
+    fn on_a_day_in(&self, (first, last): (chrono::NaiveDate, chrono::NaiveDate)) -> bool {
+        [self.created_day, self.modified_day]
+            .into_iter()
+            .flatten()
+            .any(|d| first <= d && d <= last)
+    }
+}
+
+fn day_range((first, last): (&str, &str)) -> HostResult<(chrono::NaiveDate, chrono::NaiveDate)> {
+    let day = |s: &str| {
+        chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|_| HostError::Invalid(format!("notes.query: '{s}' is not a YYYY-MM-DD day")))
+    };
+    Ok((day(first)?, day(last)?))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
     Debug,
@@ -116,6 +170,7 @@ pub struct HostContext {
     budget: ExecutionBudget,
     cancel: CancelToken,
     log_lines: Cell<u32>,
+    dated: std::cell::OnceCell<Vec<NoteDates>>,
 }
 
 impl HostContext {
@@ -130,6 +185,7 @@ impl HostContext {
             budget: ExecutionBudget::start(limits.timeout, native_allowance),
             cancel: setup.cancel,
             log_lines: Cell::new(0),
+            dated: std::cell::OnceCell::new(),
         }
     }
 
@@ -261,6 +317,87 @@ impl HostContext {
     pub fn notes_get(&self, id: &str) -> HostResult<Option<&NoteMeta>> {
         self.require(PERM_NOTES_READ)?;
         Ok(self.notes.iter().find(|n| n.id == id))
+    }
+
+    /// Each note's last-modified time and local created and modified days,
+    /// worked out once per call however many queries ask.
+    fn dated(&self) -> &[NoteDates] {
+        self.dated.get_or_init(|| {
+            let local = |timestamp: &str| DateInput::Rfc3339(timestamp.into()).to_local();
+            self.notes
+                .iter()
+                .map(|note| {
+                    let modified = local(&note.modified);
+                    NoteDates {
+                        created_day: local(&note.created).map(|dt| dt.date_naive()),
+                        modified_day: modified.map(|dt| dt.date_naive()),
+                        modified,
+                    }
+                })
+                .collect()
+        })
+    }
+
+    /// The notes matching every filter in `query`, most recently modified
+    /// first, with their local created and modified days.
+    pub fn notes_query(&self, query: &NoteQuery<'_>) -> HostResult<Vec<DatedNote<'_>>> {
+        self.require(PERM_NOTES_READ)?;
+        let range = query.days.map(day_range).transpose()?;
+        let titles: Option<std::collections::HashSet<&str>> =
+            query.titles.map(|t| t.iter().map(String::as_str).collect());
+        let mut matches: Vec<(&NoteMeta, &NoteDates)> = self
+            .notes
+            .iter()
+            .zip(self.dated())
+            .filter(|(note, dates)| {
+                titles
+                    .as_ref()
+                    .is_none_or(|t| t.contains(note.title.as_str()))
+                    && match query.folder {
+                        None => true,
+                        Some(FolderScope::Root) => note.folder_id.is_none(),
+                        Some(FolderScope::Folder(id)) => {
+                            note.folder_id.as_deref() == Some(id.as_str())
+                        }
+                    }
+                    && range.is_none_or(|range| dates.on_a_day_in(range))
+            })
+            .collect();
+        // Unparseable times sort last.
+        matches.sort_by_key(|(_, dates)| std::cmp::Reverse(dates.modified));
+        matches.truncate(query.limit.unwrap_or(usize::MAX));
+        let text = |d: Option<chrono::NaiveDate>| d.map(|d| d.to_string()).unwrap_or_default();
+        Ok(matches
+            .into_iter()
+            .map(|(note, dates)| DatedNote {
+                note,
+                created_day: text(dates.created_day),
+                modified_day: text(dates.modified_day),
+            })
+            .collect())
+    }
+
+    /// For each local day `first` through `last` with any, how many notes
+    /// were created or last modified on it, a note counted once per day.
+    pub fn notes_count_by_day(&self, first: &str, last: &str) -> HostResult<Vec<(String, u32)>> {
+        self.require(PERM_NOTES_READ)?;
+        let range = day_range((first, last))?;
+        let mut counts = std::collections::BTreeMap::<chrono::NaiveDate, u32>::new();
+        for dates in self.dated() {
+            let inside = |d: &chrono::NaiveDate| range.0 <= *d && *d <= range.1;
+            let created = dates.created_day.filter(inside);
+            let modified = dates.modified_day.filter(inside);
+            for day in created
+                .into_iter()
+                .chain(modified.filter(|m| Some(*m) != created))
+            {
+                *counts.entry(day).or_default() += 1;
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(day, count)| (day.to_string(), count))
+            .collect())
     }
 
     // ---- pluginStorage.read / .write --------------------------------------
@@ -479,6 +616,15 @@ mod tests {
         };
         denied(host.notes_all().map(drop), PERM_NOTES_READ);
         denied(host.notes_get("a").map(drop), PERM_NOTES_READ);
+        denied(
+            host.notes_query(&NoteQuery::default()).map(drop),
+            PERM_NOTES_READ,
+        );
+        denied(
+            host.notes_count_by_day("2026-11-01", "2026-11-30")
+                .map(drop),
+            PERM_NOTES_READ,
+        );
         denied(host.storage_read("a").map(drop), PERM_STORAGE_READ);
         denied(host.storage_list("").map(drop), PERM_STORAGE_READ);
         denied(host.storage_write("a", "b"), PERM_STORAGE_WRITE);
@@ -510,6 +656,103 @@ mod tests {
         assert_eq!(host.notes_all().unwrap().len(), 2);
         assert_eq!(host.notes_get("b").unwrap().unwrap().title, "Beta");
         assert!(host.notes_get("zzz").unwrap().is_none());
+    }
+
+    #[test]
+    fn note_queries_filter_by_folder_and_local_day() {
+        // Noon UTC is the same calendar day in every time zone CI runs in.
+        let dated = |id: &str, folder: Option<&str>, created: &str, modified: &str| NoteMeta {
+            folder_id: folder.map(Into::into),
+            created: format!("{created}T12:00:00Z"),
+            modified: format!("{modified}T12:00:00Z"),
+            ..note(id, id)
+        };
+        let host = HostContext::new(
+            CallSetup {
+                permissions: vec![PERM_NOTES_READ.into()],
+                notes: vec![
+                    dated("old", None, "2026-10-01", "2026-10-02"),
+                    dated("edited", None, "2026-10-01", "2026-11-20"),
+                    dated("daily", Some("journal"), "2026-11-19", "2026-11-19"),
+                    dated("bad", None, "yesterday", "2026-11-19"),
+                ],
+                ..CallSetup::default()
+            },
+            limits::WASM.resolve(None, None),
+            limits::NATIVE_ALLOWANCE,
+        );
+        let ids = |r: HostResult<Vec<DatedNote<'_>>>| {
+            r.unwrap()
+                .iter()
+                .map(|d| d.note.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let november = Some(("2026-11-01", "2026-11-30"));
+
+        // Either day inside the range counts, the newest edit first.
+        assert_eq!(
+            ids(host.notes_query(&NoteQuery {
+                days: november,
+                ..NoteQuery::default()
+            })),
+            ["edited", "daily", "bad"]
+        );
+        let all = host.notes_query(&NoteQuery::default()).unwrap();
+        assert_eq!(all[0].created_day, "2026-10-01");
+        assert_eq!(all[0].modified_day, "2026-11-20");
+        assert_eq!(all[2].created_day, "");
+        assert_eq!(all[3].note.id, "old");
+        assert_eq!(
+            ids(host.notes_query(&NoteQuery {
+                limit: Some(2),
+                ..NoteQuery::default()
+            })),
+            ["edited", "daily"]
+        );
+
+        let journal = FolderScope::Folder("journal".into());
+        assert_eq!(
+            ids(host.notes_query(&NoteQuery {
+                folder: Some(&journal),
+                ..NoteQuery::default()
+            })),
+            ["daily"]
+        );
+        assert_eq!(
+            ids(host.notes_query(&NoteQuery {
+                folder: Some(&FolderScope::Root),
+                days: Some(("2026-10-02", "2026-10-02")),
+                ..NoteQuery::default()
+            })),
+            ["old"]
+        );
+        let titled = ["daily".to_string(), "missing".to_string()];
+        assert_eq!(
+            ids(host.notes_query(&NoteQuery {
+                titles: Some(&titled),
+                ..NoteQuery::default()
+            })),
+            ["daily"]
+        );
+        assert!(matches!(
+            host.notes_query(&NoteQuery {
+                days: Some(("2026-11-01", "soon")),
+                ..NoteQuery::default()
+            }),
+            Err(HostError::Invalid(_))
+        ));
+
+        // A note created and edited on one day counts once there.
+        let counts = |first, last| host.notes_count_by_day(first, last).unwrap();
+        assert_eq!(
+            counts("2026-11-01", "2026-11-30"),
+            [("2026-11-19".to_string(), 2), ("2026-11-20".to_string(), 1)]
+        );
+        assert_eq!(
+            counts("2026-10-01", "2026-10-02"),
+            [("2026-10-01".to_string(), 2), ("2026-10-02".to_string(), 1)]
+        );
     }
 
     #[test]

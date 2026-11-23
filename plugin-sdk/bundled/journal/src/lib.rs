@@ -1,10 +1,13 @@
 //! Shipped Journal plugin: daily notes and a calendar of the notes on each day.
 //!
 //! A daily note is the note titled with the day, in the title format, directly
-//! inside the journal folder. Days are local `YYYY-MM-DD` strings; the host
-//! clock turns them into titles and buckets notes by their local day.
+//! inside the journal folder, and shows only on its own day. Other notes show
+//! on the day they were created and the day they were last edited. Days are
+//! local `YYYY-MM-DD` strings; the host clock turns them into titles, and the
+//! host's note queries bucket and count notes by their local day, so a render
+//! costs the same however many notes share a day.
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod view;
 
@@ -15,6 +18,8 @@ use mindstream::plugin::types::NoteMeta;
 
 const DEFAULT_TITLE_FORMAT: &str = "YYYY-MM-DD";
 const MAX_DAYS: u64 = 62;
+/// Notes listed for the selected day, besides its daily note.
+const MAX_LISTED: usize = 100;
 
 fn host<T>(result: Result<T, mindstream::plugin::types::Error>) -> Result<T, String> {
     result.map_err(|e| format!("{e:?}"))
@@ -105,61 +110,104 @@ impl<'a> Journal<'a> {
     /// Marks for `count` days from `from`, and the notes on `selected`.
     fn days_for(&self, from: &str, count: u64, selected: &str) -> Result<Value, String> {
         let count = count.min(MAX_DAYS);
-        let notes = host(notes::all())?;
-
-        let folder = self.folder();
-        let mut daily: HashMap<&str, usize> = HashMap::new();
-        for (i, note) in notes.iter().enumerate() {
-            if note.folder_id.as_deref() == folder {
-                daily.entry(note.title.as_str()).or_insert(i);
-            }
-        }
-        let mut by_day: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, note) in notes.iter().enumerate() {
-            let created = host(clock::format(&note.created, "YYYY-MM-DD", None))?;
-            let modified = host(clock::format(&note.modified, "YYYY-MM-DD", None))?;
-            by_day.entry(created.clone()).or_default().push(i);
-            if modified != created {
-                by_day.entry(modified).or_default().push(i);
-            }
-        }
-        let on_day = |key: &str, daily: Option<usize>| -> Vec<usize> {
-            by_day
-                .get(key)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&i| Some(i) != daily)
-                .collect()
-        };
-
         let start = self.noon(from);
-        let mut days = Vec::new();
+        let mut shown = Vec::new();
         for i in 0..count {
             let timestamp = host(clock::add(&start, i as i64, TimeUnit::Day))?;
             let key = host(clock::format(&timestamp, "YYYY-MM-DD", None))?;
-            let note = daily.get(self.title(&timestamp)?.as_str()).copied();
+            shown.push((key, self.title(&timestamp)?));
+        }
+        let last = shown.last().map(|(key, _)| key.clone()).unwrap_or_default();
+        let selected_title = self.title(&self.noon(selected))?;
+
+        let mut titles: Vec<String> = shown.iter().map(|(_, title)| title.clone()).collect();
+        titles.push(selected_title.clone());
+        let journal = host(notes::query(&notes::NoteQuery {
+            folder: Some(match self.folder() {
+                Some(id) => notes::FolderScope::Folder(id.into()),
+                None => notes::FolderScope::Root,
+            }),
+            days: None,
+            titles: Some(titles),
+            limit: None,
+        }))?;
+        let mut daily: HashMap<&str, &notes::DatedNote> = HashMap::new();
+        for note in &journal {
+            daily.entry(note.note.title.as_str()).or_insert(note);
+        }
+
+        // A daily note is not one of the other notes on the days it was
+        // created or edited, its own included.
+        let others = |first: &str, last: &str| -> Result<HashMap<String, u32>, String> {
+            let mut counts: HashMap<String, u32> = host(notes::count_by_day(&notes::DayRange {
+                first: first.into(),
+                last: last.into(),
+            }))?
+            .into_iter()
+            .map(|c| (c.day, c.notes))
+            .collect();
+            for note in daily.values() {
+                for day in dated_days(note) {
+                    if let Some(count) = counts.get_mut(day) {
+                        *count = count.saturating_sub(1);
+                    }
+                }
+            }
+            Ok(counts)
+        };
+        let counts = others(from, &last)?;
+
+        let mut days = Vec::new();
+        for (key, title) in &shown {
             days.push(json!({
                 "date": key,
-                "daily": note.is_some(),
-                "notes": on_day(&key, note).len(),
+                "daily": daily.contains_key(title.as_str()),
+                "notes": counts.get(key).copied().unwrap_or(0),
             }));
         }
 
-        let note = daily
-            .get(self.title(&self.noon(selected))?.as_str())
-            .copied();
-        let mut others = on_day(selected, note);
-        others.sort_by(|&a, &b| notes[b].modified.cmp(&notes[a].modified));
+        let total = if (from..=last.as_str()).contains(&selected) {
+            counts.get(selected).copied()
+        } else {
+            others(selected, selected)?.get(selected).copied()
+        }
+        .unwrap_or(0) as usize;
+        let excluded: HashSet<&str> = daily.values().map(|d| d.note.id.as_str()).collect();
+        let listed: Vec<Value> = host(notes::query(&notes::NoteQuery {
+            folder: None,
+            days: Some(notes::DayRange {
+                first: selected.into(),
+                last: selected.into(),
+            }),
+            titles: None,
+            limit: Some((MAX_LISTED + excluded.len()) as u32),
+        }))?
+        .iter()
+        .filter(|d| !excluded.contains(d.note.id.as_str()))
+        .take(MAX_LISTED)
+        .map(|d| {
+            let mut row = summary(&d.note);
+            row["edited"] = json!(d.created_day != selected);
+            row
+        })
+        .collect();
         Ok(json!({
             "days": days,
             "selected": {
                 "date": selected,
-                "daily": note.map(|i| summary(&notes[i])),
-                "notes": others.iter().map(|&i| summary(&notes[i])).collect::<Vec<_>>(),
+                "daily": daily.get(selected_title.as_str()).map(|d| summary(&d.note)),
+                "more": total.saturating_sub(listed.len()),
+                "notes": listed,
             },
         }))
     }
+}
+
+/// The days a note was created and last edited, each once.
+fn dated_days(note: &notes::DatedNote) -> impl Iterator<Item = &str> {
+    let created = note.created_day.as_str();
+    let modified = note.modified_day.as_str();
+    std::iter::once(created).chain((modified != created).then_some(modified))
 }
 
 fn summary(note: &NoteMeta) -> Value {

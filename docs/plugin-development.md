@@ -381,6 +381,7 @@ every operation, even if the plugin bypasses the SDK wrappers.
 | `clock.now/nowMillis/today/format/add`     | none                      | local host time and moment-style formatting          |
 | `markdown.frontmatter`                     | none                      | escaped YAML, keys sorted                            |
 | `notes.all/get`                            | `notes.read`              | metadata snapshot, never note bodies                 |
+| `notes.query/countByDay`                   | `notes.read`              | notes by folder, local day and title; daily counts   |
 | `storage.read/readJson/list`               | `pluginStorage.read`      | plugin-owned files; missing files return `undefined` |
 | `storage.write/writeJson/delete`           | `pluginStorage.write`     | contained relative paths; at most 4 MiB per file     |
 | `nativeTools.available/run`                | `nativeTools.runDeclared` | declared PATH binaries, launched directly            |
@@ -391,6 +392,17 @@ cancellation stop the call rather than returning a catchable host error.
 
 The experimental `batch.execute` sends a list of these calls in one crossing;
 see [Batching host calls](plugin-batch-api.md).
+
+`notes.query({ folder?, days?, titles?, limit? })` filters in the host: `folder`
+is a folder id for the notes directly inside it or `null` for those outside
+every folder, `days: { first, last }` keeps notes created or last modified on a
+local day in that range, `titles` keeps notes with exactly one of those titles,
+and `limit` caps the result. Results come newest edit first, and each carries
+`createdDay` and `modifiedDay`, so a calendar needs no `clock.format` call per
+note. `notes.countByDay({ first, last })` counts the notes created or last
+modified on each day in the range without copying them into the plugin. A
+plugin's memory is capped (32 MiB by default), so prefer these to
+`notes.all()` in a vault that may hold tens of thousands of notes.
 
 `NoteMeta` uses `folderId` and `folderPath`. Use `clock.format` for local dates
 and `ctx.locale` for month and weekday names. Guest JavaScript dates use UTC.

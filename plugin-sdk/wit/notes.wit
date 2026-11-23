@@ -12,4 +12,53 @@ interface notes {
 
     /// One note, or none when there is no such note.
     get: func(id: string) -> result<option<note-meta>, error>;
+
+    /// Where a query looks.
+    variant folder-scope {
+        /// Notes outside every folder.
+        root,
+        /// Notes directly inside this folder, not its subfolders.
+        folder(string),
+    }
+
+    /// Local days `first` through `last`, both `YYYY-MM-DD` and inclusive.
+    record day-range {
+        first: string,
+        last: string,
+    }
+
+    /// Filters a query applies together. An absent filter matches every note.
+    record note-query {
+        folder: option<folder-scope>,
+        /// Notes created or last modified on a day in the range.
+        days: option<day-range>,
+        /// Notes titled exactly one of these.
+        titles: option<list<string>>,
+        /// At most this many notes.
+        limit: option<u32>,
+    }
+
+    /// A note with the local days it was created and last modified.
+    record dated-note {
+        note: note-meta,
+        /// `YYYY-MM-DD` in the user's time zone.
+        created-day: string,
+        modified-day: string,
+    }
+
+    /// The notes outside the trash that match `filter`, most recently
+    /// modified first, with their local days, so a plugin needs no clock call
+    /// per note.
+    query: func(filter: note-query) -> result<list<dated-note>, error>;
+
+    /// How many notes were created or last modified on a local day.
+    record day-count {
+        /// `YYYY-MM-DD`.
+        day: string,
+        notes: u32,
+    }
+
+    /// For each day in `days` with any, how many notes outside the trash were
+    /// created or last modified on it. A note counts once per day.
+    count-by-day: func(days: day-range) -> result<list<day-count>, error>;
 }

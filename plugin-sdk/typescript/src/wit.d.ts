@@ -359,8 +359,82 @@ declare module 'mindstream:plugin/notes@0.1.0' {
    * One note, or none when there is no such note.
    */
   export function get(id: string): NoteMeta | null;
+  /**
+   * The notes outside the trash that match `filter`, most recently
+   * modified first, with their local days, so a plugin needs no clock call
+   * per note.
+   */
+  export function query(filter: NoteQuery): Array<DatedNote>;
+  /**
+   * For each day in `days` with any, how many notes outside the trash were
+   * created or last modified on it. A note counts once per day.
+   */
+  export function countByDay(days: DayRange): Array<DayCount>;
   export type Error = import('mindstream:plugin/types@0.1.0').Error;
   export type NoteMeta = import('mindstream:plugin/types@0.1.0').NoteMeta;
+  /**
+   * Where a query looks.
+   */
+  export type FolderScope = FolderScopeRoot | FolderScopeFolder;
+  /**
+   * Notes outside every folder.
+   */
+  export interface FolderScopeRoot {
+    tag: 'root';
+  }
+  /**
+   * Notes directly inside this folder, not its subfolders.
+   */
+  export interface FolderScopeFolder {
+    tag: 'folder';
+    val: string;
+  }
+  /**
+   * Local days `first` through `last`, both `YYYY-MM-DD` and inclusive.
+   */
+  export interface DayRange {
+    first: string;
+    last: string;
+  }
+  /**
+   * Filters a query applies together. An absent filter matches every note.
+   */
+  export interface NoteQuery {
+    folder: FolderScope | null;
+    /**
+     * Notes created or last modified on a day in the range.
+     */
+    days: DayRange | null;
+    /**
+     * Notes titled exactly one of these.
+     */
+    titles: Array<string> | null;
+    /**
+     * At most this many notes.
+     */
+    limit: number | null;
+  }
+  /**
+   * A note with the local days it was created and last modified.
+   */
+  export interface DatedNote {
+    note: NoteMeta;
+    /**
+     * `YYYY-MM-DD` in the user's time zone.
+     */
+    createdDay: string;
+    modifiedDay: string;
+  }
+  /**
+   * How many notes were created or last modified on a local day.
+   */
+  export interface DayCount {
+    /**
+     * `YYYY-MM-DD`.
+     */
+    day: string;
+    notes: number;
+  }
 }
 
 declare module 'mindstream:plugin/runtime@0.1.0' {

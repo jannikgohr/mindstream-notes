@@ -7,7 +7,7 @@
 
 use crate::dates::{DateInput, TimeUnit};
 use crate::error::HostError;
-use crate::host::{HostContext, LogLevel, NoteMeta, ToolRunOptions};
+use crate::host::{FolderScope, HostContext, LogLevel, NoteMeta, NoteQuery, ToolRunOptions};
 
 use super::limiter::CallLimiter;
 
@@ -147,6 +147,41 @@ impl notes::Host for CallState {
 
     fn get(&mut self, id: String) -> Result<Option<types::NoteMeta>, HostError> {
         Ok(self.host.notes_get(&id)?.map(note))
+    }
+
+    fn query(&mut self, filter: notes::NoteQuery) -> Result<Vec<notes::DatedNote>, HostError> {
+        let folder = filter.folder.map(|scope| match scope {
+            notes::FolderScope::Root => FolderScope::Root,
+            notes::FolderScope::Folder(id) => FolderScope::Folder(id),
+        });
+        let days = filter
+            .days
+            .as_ref()
+            .map(|r| (r.first.as_str(), r.last.as_str()));
+        Ok(self
+            .host
+            .notes_query(&NoteQuery {
+                folder: folder.as_ref(),
+                days,
+                titles: filter.titles.as_deref(),
+                limit: filter.limit.map(|limit| limit as usize),
+            })?
+            .into_iter()
+            .map(|d| notes::DatedNote {
+                note: note(d.note),
+                created_day: d.created_day,
+                modified_day: d.modified_day,
+            })
+            .collect())
+    }
+
+    fn count_by_day(&mut self, days: notes::DayRange) -> Result<Vec<notes::DayCount>, HostError> {
+        Ok(self
+            .host
+            .notes_count_by_day(&days.first, &days.last)?
+            .into_iter()
+            .map(|(day, notes)| notes::DayCount { day, notes })
+            .collect())
     }
 }
 
