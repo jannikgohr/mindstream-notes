@@ -116,7 +116,10 @@
     sortTree(
       tree.tree,
       ui.sortStrategy,
-      { notesById: tree.notesById },
+      {
+        notesById: tree.notesById,
+        collectionsById: tree.collectionsById
+      },
       ui.sortDirection
     )
   );
