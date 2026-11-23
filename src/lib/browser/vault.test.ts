@@ -252,7 +252,8 @@ describe('vault connection recovery', () => {
       ok: false,
       error: {
         code: 'databaseBusy',
-        message: 'Already open This tab opens it once that one closes.'
+        message:
+          'The database is open in another tab. This tab opens it once that one closes.'
       }
     });
     await expect(invokeBrowser('list_notes', {})).resolves.toEqual([]);
