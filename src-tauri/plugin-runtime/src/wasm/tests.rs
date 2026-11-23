@@ -254,6 +254,38 @@ fn rust_templates_prototype_matches_typescript_outputs() {
 }
 
 #[test]
+fn shipped_journal_renders_a_large_vault_whose_notes_share_one_day() {
+    const JOURNAL: &[u8] = include_bytes!("../../../../plugins/journal/plugin.wasm");
+    let mut call = Call::of(JOURNAL, &[PERM_NOTES_READ]);
+    // An import dates every note on the day it ran.
+    call.notes = (0..20_000)
+        .map(|i| NoteMeta {
+            created: "2026-11-19T12:00:00Z".into(),
+            modified: "2026-11-19T12:00:00Z".into(),
+            ..note(&format!("n{i}"), &format!("Article {i}"), &[])
+        })
+        .collect();
+    let rendered = call
+        .run_on(
+            runtime(),
+            "render",
+            json!({"state": {"month": "2026-11", "selected": "2026-11-19"}}),
+        )
+        .unwrap();
+    let children = rendered["view"]["children"].as_array().unwrap();
+    assert_eq!(
+        children[0]["days"]["2026-11-19"]["title"],
+        json!({"key": "view.notes", "count": 20_000})
+    );
+    // The create-daily-note row, then the newest notes.
+    assert_eq!(children[2]["items"].as_array().unwrap().len(), 101);
+    assert_eq!(
+        children[3],
+        json!({"type": "text", "text": {"key": "view.more", "count": 19_900}, "tone": "muted"})
+    );
+}
+
+#[test]
 fn shipped_rust_typst_and_typescript_example_keep_source_editing_without_native_tools() {
     const RUST: &[u8] = include_bytes!("../../../../plugins/typst/plugin.wasm");
     const TS: &[u8] = mindstream_plugin_fixtures::TYPST_TYPESCRIPT;

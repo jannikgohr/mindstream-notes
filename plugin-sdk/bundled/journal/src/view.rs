@@ -73,10 +73,16 @@ impl Journal<'_> {
             })),
         }
         for note in selected["notes"].as_array().into_iter().flatten() {
+            let folder = note["folder"].as_str().unwrap_or_default();
+            let detail = match (note["edited"].as_bool() == Some(true), folder) {
+                (false, _) => json!(folder),
+                (true, "") => json!({ "key": "view.edited" }),
+                (true, _) => json!({ "key": "view.editedIn", "params": { "folder": folder } }),
+            };
             items.push(json!({
                 "label": note["title"],
                 "noteKind": note["kind"],
-                "detail": note["folder"],
+                "detail": detail,
                 "on": { "effect": "openNote", "noteId": note["id"], "preview": true },
             }));
         }
@@ -85,23 +91,29 @@ impl Journal<'_> {
             "date": state.selected,
             "format": { "weekday": "long", "month": "long", "day": "numeric" },
         });
+        let mut children = vec![
+            json!({
+                "type": "calendar",
+                "month": state.month,
+                "selected": state.selected,
+                "days": days,
+                "onSelect": "select",
+                "onMonth": "month",
+            }),
+            json!({ "type": "heading", "text": heading }),
+            json!({ "type": "list", "items": items }),
+        ];
+        let more = selected["more"].as_u64().unwrap_or(0);
+        if more > 0 {
+            children.push(json!({
+                "type": "text",
+                "text": { "key": "view.more", "count": more },
+                "tone": "muted",
+            }));
+        }
         Ok(json!({
             "state": { "month": state.month, "selected": state.selected },
-            "view": {
-                "type": "stack",
-                "children": [
-                    {
-                        "type": "calendar",
-                        "month": state.month,
-                        "selected": state.selected,
-                        "days": days,
-                        "onSelect": "select",
-                        "onMonth": "month",
-                    },
-                    { "type": "heading", "text": heading },
-                    { "type": "list", "items": items },
-                ],
-            },
+            "view": { "type": "stack", "children": children },
         }))
     }
 

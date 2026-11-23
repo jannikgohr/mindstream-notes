@@ -607,6 +607,14 @@ describe('Journal component', { timeout: 60_000 }, () => {
           folderPath: 'Daily',
           created: '2026-11-19T08:00:00Z'
         },
+        // Yesterday's daily note, written today.
+        {
+          id: 'd18',
+          title: '2026-11-18',
+          folderId: 'daily',
+          folderPath: 'Daily',
+          created: '2026-11-19T07:00:00Z'
+        },
         {
           id: 'loose',
           title: '2026-11-20',
@@ -619,20 +627,23 @@ describe('Journal component', { timeout: 60_000 }, () => {
           title: 'Ideas',
           folderId: 'work',
           folderPath: 'Areas / Work',
-          created: '2026-11-19T09:00:00Z'
+          created: '2026-11-19T09:00:00Z',
+          modified: '2026-11-21T09:00:00Z'
         }
       ]
     });
     type Calendar = {
       days: Record<string, { marks: string[]; strong: boolean }>;
     };
-    const { view } = await plugin.call<{
-      view: { children: [Calendar, unknown, { items: unknown[] }] };
-    }>('render', { state: { month: '2026-11', selected: '2026-11-19' } });
-    const [calendar, , list] = view.children;
-    // A daily note outside the folder is an ordinary note; an edit counts on
-    // the day it happened too.
+    const render = (selected: string) =>
+      plugin.call<{
+        view: { children: [Calendar, unknown, { items: unknown[] }] };
+      }>('render', { state: { month: '2026-11', selected } });
+    const [calendar, , list] = (await render('2026-11-19')).view.children;
+    // A daily note shows only on its own day. A daily note outside the folder
+    // is an ordinary note, and an edit counts on the day it happened too.
     expect(calendar.days).toEqual({
+      '2026-11-18': { marks: ['accent'], strong: true, title: null },
       '2026-11-19': {
         marks: ['accent', 'muted'],
         strong: true,
@@ -644,14 +655,27 @@ describe('Journal component', { timeout: 60_000 }, () => {
         title: { key: 'view.notes', count: 1 }
       },
       '2026-11-21': {
-        marks: ['muted'],
+        marks: ['muted', 'muted'],
         strong: false,
-        title: { key: 'view.notes', count: 1 }
+        title: { key: 'view.notes', count: 2 }
       }
     });
     expect(list.items).toEqual([
       expect.objectContaining({ label: '2026-11-19', tone: 'accent' }),
       expect.objectContaining({ label: 'Ideas', detail: 'Work' })
+    ]);
+
+    // Notes edited on a day they weren't created say so, newest edit first.
+    const [, , edited] = (await render('2026-11-21')).view.children;
+    expect(edited.items.slice(1)).toEqual([
+      expect.objectContaining({
+        label: 'Ideas',
+        detail: { key: 'view.editedIn', params: { folder: 'Work' } }
+      }),
+      expect.objectContaining({
+        label: '2026-11-20',
+        detail: { key: 'view.edited' }
+      })
     ]);
   });
 });

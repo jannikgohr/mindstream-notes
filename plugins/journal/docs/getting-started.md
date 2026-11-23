@@ -2,7 +2,14 @@
 
 **Journal** in the sidebar shows a month calendar. A dot marks a day with a
 daily note; grey dots count the other notes created or last edited that day,
-which are listed under the calendar for the selected day.
+which are listed under the calendar for the selected day: up to 100, most
+recently edited first. A note listed on a day it was edited but not created
+says **Edited**. Only a note's last edit is known, so a note leaves the day of
+an earlier edit.
+
+A daily note shows only on its own day, even when it was written on another.
+The calendar recognises daily notes for the days it shows; one written for a
+day further away lists as an ordinary note on the day it was written.
 
 Click a day, or **Today**, to open that day's daily note. If it doesn't exist
 yet, it's created. **Open today's note** does the same from the command palette

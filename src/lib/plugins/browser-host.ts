@@ -22,6 +22,14 @@ export interface HostNote {
   modified: string;
 }
 
+/** `notes.note-query`, as jco lifts it. */
+export interface HostNoteQuery {
+  folder?: { tag: 'root' } | { tag: 'folder'; val: string };
+  days?: { first: string; last: string };
+  titles?: string[];
+  limit?: number;
+}
+
 /** What one call may reach, decided before the plugin starts. */
 export interface HostCall {
   pluginId: string;
@@ -397,6 +405,88 @@ export function newUuid(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** A `YYYY-MM-DD` that names a real day, refused as `notes_query` refuses it. */
+function queryDay(value: string): string {
+  const m = DAY.exec(value);
+  if (!m || Number(m[3]) < 1 || Number(m[3]) > daysInMonth(+m[1], +m[2]))
+    refuse('invalid', `notes.query: '${value}' is not a YYYY-MM-DD day`);
+  return value;
+}
+
+/** A timestamp's local `YYYY-MM-DD`, or empty when it doesn't parse. */
+function localDay(timestamp: string): string {
+  let date: Date;
+  try {
+    date = parseRfc3339(timestamp);
+  } catch {
+    return '';
+  }
+  return `${String(date.getFullYear()).padStart(4, '0')}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+/** The time a timestamp names, or `-Infinity` when it doesn't parse. */
+function instant(timestamp: string): number {
+  try {
+    return parseRfc3339(timestamp).getTime();
+  } catch {
+    return -Infinity;
+  }
+}
+
+/** `notes_query`: every filter given must match, newest edit first. */
+export function queryNotes(notes: readonly HostNote[], query: HostNoteQuery) {
+  // Padded days compare in calendar order as strings.
+  const range = query.days && {
+    first: queryDay(query.days.first),
+    last: queryDay(query.days.last)
+  };
+  const titles = query.titles && new Set(query.titles);
+  const folder = query.folder;
+  const inRange = (day: string) =>
+    day !== '' && day >= range!.first && day <= range!.last;
+  const matches = notes.flatMap((note) => {
+    if (titles && !titles.has(note.title)) return [];
+    if (folder?.tag === 'root' && note.folderId !== undefined) return [];
+    if (folder?.tag === 'folder' && note.folderId !== folder.val) return [];
+    const createdDay = localDay(note.created);
+    const modifiedDay = localDay(note.modified);
+    if (range && !inRange(createdDay) && !inRange(modifiedDay)) return [];
+    return [{ note, createdDay, modifiedDay, at: instant(note.modified) }];
+  });
+  // Equal times subtract to NaN when both are -Infinity.
+  matches.sort((a, b) => b.at - a.at || 0);
+  return matches
+    .slice(0, query.limit ?? matches.length)
+    .map(({ note, createdDay, modifiedDay }) => ({
+      note,
+      createdDay,
+      modifiedDay
+    }));
+}
+
+/** `notes_count_by_day`: a note counts once on each day it was created or edited. */
+export function countNotesByDay(
+  notes: readonly HostNote[],
+  days: { first: string; last: string }
+) {
+  const first = queryDay(days.first);
+  const last = queryDay(days.last);
+  const counts = new Map<string, number>();
+  for (const note of notes) {
+    for (const day of new Set([
+      localDay(note.created),
+      localDay(note.modified)
+    ]))
+      if (day !== '' && day >= first && day <= last)
+        counts.set(day, (counts.get(day) ?? 0) + 1);
+  }
+  return [...counts.keys()]
+    .sort()
+    .map((day) => ({ day, notes: counts.get(day)! }));
+}
+
 /** The import object for one call, keyed the way jco's bindings look it up. */
 export function browserHostImports(
   call: HostCall
@@ -442,6 +532,14 @@ export function browserHostImports(
       get(id: string) {
         need('notes.read');
         return call.notes.find((note) => note.id === id);
+      },
+      query(filter: HostNoteQuery) {
+        need('notes.read');
+        return queryNotes(call.notes, filter);
+      },
+      countByDay(days: { first: string; last: string }) {
+        need('notes.read');
+        return countNotesByDay(call.notes, days);
       }
     },
     'mindstream:plugin/storage': {
