@@ -138,6 +138,8 @@ function blankChord(): Chord {
  * input returns `null` so the caller can reject the whole binding.
  */
 export function normalizeKey(raw: string): string | null {
+  // The space bar's `event.key` is a bare space, which trimming would drop.
+  if (raw === ' ') return KEY_ALIASES[' '];
   const t = raw.trim().toLowerCase();
   if (t.length === 0) return null;
   if (KEY_ALIASES[t]) return KEY_ALIASES[t];

@@ -586,6 +586,13 @@ describe('bindingFromEvent', () => {
     expect(bindingFromEvent(keyEvent({ key: 'b', code: 'KeyB' }))).toBe(null);
   });
 
+  it('records the space bar, whose key is a bare space', () => {
+    forceWindowsModKey();
+    expect(
+      bindingFromEvent(keyEvent({ key: ' ', code: 'Space', ctrlKey: true }))
+    ).toBe('mod+space');
+  });
+
   it('accepts an unmodified function key', () => {
     forceWindowsModKey();
     expect(bindingFromEvent(keyEvent({ key: 'F2', code: 'F2' }))).toBe('f2');
