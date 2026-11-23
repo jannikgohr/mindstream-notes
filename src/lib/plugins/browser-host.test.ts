@@ -3,8 +3,10 @@ import {
   browserHostImports,
   clockAdd,
   clockFormat,
+  countNotesByDay,
   frontmatter,
   parseRfc3339,
+  queryNotes,
   toRfc3339,
   type HostCall
 } from './browser-host';
@@ -163,6 +165,80 @@ describe('frontmatter', () => {
   });
 });
 
+describe('queryNotes', () => {
+  // Noon UTC is the same calendar day in every time zone the tests run in.
+  const dated = (
+    id: string,
+    folderId: string | undefined,
+    created: string,
+    modified: string
+  ) => ({
+    id,
+    title: id,
+    tags: [],
+    kind: 'markdown',
+    folderId,
+    folderPath: '',
+    created: `${created}T12:00:00Z`,
+    modified: `${modified}T12:00:00Z`
+  });
+  const notes = [
+    dated('old', undefined, '2026-10-01', '2026-10-02'),
+    dated('edited', undefined, '2026-10-01', '2026-11-20'),
+    dated('daily', 'journal', '2026-11-19', '2026-11-19'),
+    dated('bad', undefined, 'yesterday', '2026-11-19')
+  ];
+  const ids = (query: Parameters<typeof queryNotes>[1]) =>
+    queryNotes(notes, query).map((d) => d.note.id);
+
+  it('filters by folder, local day and title as the Rust host does', () => {
+    // Either day inside the range counts, the newest edit first.
+    expect(ids({ days: { first: '2026-11-01', last: '2026-11-30' } })).toEqual([
+      'edited',
+      'daily',
+      'bad'
+    ]);
+    const all = queryNotes(notes, {});
+    expect(all[0]).toMatchObject({
+      createdDay: '2026-10-01',
+      modifiedDay: '2026-11-20'
+    });
+    expect(all[2].createdDay).toBe('');
+    expect(all[3].note.id).toBe('old');
+    expect(ids({ limit: 2 })).toEqual(['edited', 'daily']);
+    expect(ids({ folder: { tag: 'folder', val: 'journal' } })).toEqual([
+      'daily'
+    ]);
+    expect(
+      ids({
+        folder: { tag: 'root' },
+        days: { first: '2026-10-02', last: '2026-10-02' }
+      })
+    ).toEqual(['old']);
+    expect(ids({ titles: ['daily', 'missing'] })).toEqual(['daily']);
+    expect(
+      refusal(() =>
+        queryNotes(notes, { days: { first: '2026-11-01', last: 'soon' } })
+      )
+    ).toMatchObject({ tag: 'invalid' });
+  });
+
+  it('counts a note once on each day it was created or edited', () => {
+    expect(
+      countNotesByDay(notes, { first: '2026-11-01', last: '2026-11-30' })
+    ).toEqual([
+      { day: '2026-11-19', notes: 2 },
+      { day: '2026-11-20', notes: 1 }
+    ]);
+    expect(
+      countNotesByDay(notes, { first: '2026-10-01', last: '2026-10-02' })
+    ).toEqual([
+      { day: '2026-10-01', notes: 2 },
+      { day: '2026-10-02', notes: 1 }
+    ]);
+  });
+});
+
 describe('browserHostImports', () => {
   const note = {
     id: 'n1',
@@ -198,6 +274,14 @@ describe('browserHostImports', () => {
     expect(notes.all()).toEqual([note]);
     expect((notes.get as (id: string) => unknown)('n1')).toEqual(note);
     expect((notes.get as (id: string) => unknown)('n2')).toBeUndefined();
+    expect(refusal(() => denied.query({} as never))).toEqual({
+      tag: 'denied',
+      val: 'notes.read'
+    });
+    expect(refusal(() => denied.countByDay({} as never))).toEqual({
+      tag: 'denied',
+      val: 'notes.read'
+    });
   });
 
   it('has no plugin data directory', () => {

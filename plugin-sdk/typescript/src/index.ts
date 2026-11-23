@@ -201,8 +201,62 @@ export const notes = {
 
   get(id: string): NoteMeta | undefined {
     return hostCall(() => notesHost.get(id)) ?? undefined;
+  },
+
+  /**
+   * The notes matching every given filter, most recently modified first,
+   * with the local days they were created and last modified, so no clock
+   * call per note is needed.
+   */
+  query(filter: NoteQuery = {}): DatedNote[] {
+    const folder =
+      filter.folder === undefined
+        ? null
+        : filter.folder === null
+          ? { tag: 'root' as const }
+          : { tag: 'folder' as const, val: filter.folder };
+    return hostCall(() =>
+      notesHost.query({
+        folder,
+        days: filter.days ?? null,
+        titles: filter.titles ?? null,
+        limit: filter.limit ?? null
+      })
+    );
+  },
+
+  /**
+   * For each local day `first` through `last` (`YYYY-MM-DD`) with any, how
+   * many notes were created or last modified on it. A note counts once per day.
+   */
+  countByDay(days: { first: string; last: string }): DayCount[] {
+    return hostCall(() => notesHost.countByDay(days));
   }
 };
+
+export interface NoteQuery {
+  /** A folder id for the notes directly inside it, `null` for those outside every folder. */
+  folder?: string | null;
+  /** Notes created or last modified on a local day `first` through `last` (`YYYY-MM-DD`). */
+  days?: { first: string; last: string };
+  /** Notes titled exactly one of these. */
+  titles?: string[];
+  /** At most this many notes. */
+  limit?: number;
+}
+
+/** How many notes were created or last modified on a local day. */
+export interface DayCount {
+  day: string;
+  notes: number;
+}
+
+/** A note with its local created and last-modified days (`YYYY-MM-DD`). */
+export interface DatedNote {
+  note: NoteMeta;
+  createdDay: string;
+  modifiedDay: string;
+}
 
 // ---- pluginStorage.read / .write --------------------------------------------
 

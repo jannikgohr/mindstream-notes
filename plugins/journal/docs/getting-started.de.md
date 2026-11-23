@@ -2,8 +2,16 @@
 
 **Journal** in der Seitenleiste zeigt einen Monatskalender. Ein Punkt markiert
 einen Tag mit Tagesnotiz; graue Punkte zählen die anderen Notizen, die an dem
-Tag erstellt oder zuletzt bearbeitet wurden. Sie stehen für den gewählten Tag
-unter dem Kalender.
+Tag erstellt oder zuletzt bearbeitet wurden. Für den gewählten Tag stehen sie
+unter dem Kalender: bis zu 100, die zuletzt bearbeiteten zuerst. Eine Notiz, die an
+einem Tag bearbeitet, aber nicht erstellt wurde, ist als **Bearbeitet**
+markiert. Bekannt ist nur die letzte Bearbeitung, daher verschwindet eine Notiz
+vom Tag einer früheren Bearbeitung.
+
+Eine Tagesnotiz erscheint nur an ihrem eigenen Tag, auch wenn sie an einem
+anderen geschrieben wurde. Der Kalender erkennt Tagesnotizen für die Tage, die
+er zeigt; eine für einen weiter entfernten Tag erscheint als gewöhnliche Notiz
+am Tag, an dem sie geschrieben wurde.
 
 Ein Klick auf einen Tag oder auf **Heute** öffnet die Tagesnotiz dieses Tages.
 Gibt es sie noch nicht, wird sie angelegt. **Heutige Notiz öffnen** tut dasselbe
