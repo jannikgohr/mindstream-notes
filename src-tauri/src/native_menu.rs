@@ -381,7 +381,7 @@ fn close_focused_window(app: &AppHandle) {
         return;
     };
     if window.label() == "main" {
-        let _ = window.hide();
+        crate::vault_supervisor::hide_unless_another_vault_is_open(app);
     } else if let Err(err) = window.close() {
         log::warn!("[native-menu] failed to close {}: {err}", window.label());
     }

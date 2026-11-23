@@ -1602,7 +1602,7 @@
     },
     "general.closeToTray": {
       "label": "In Systemablage schließen",
-      "description": "Blendet das Hauptfenster aus, statt die App beim Schließen zu beenden."
+      "description": "Schließt du den letzten offenen Tresor, wird sein Fenster ausgeblendet, statt die App zu beenden. Sind weitere Tresore offen, schließt das Fenster seinen Tresor."
     },
     "general.startInTray": {
       "label": "In Systemablage starten",

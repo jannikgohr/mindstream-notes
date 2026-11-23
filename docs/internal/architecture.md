@@ -92,6 +92,9 @@ source worker before showing the target. The durable `vault-handoff.json` record
 binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keeps
 a still-open source; after source closure it finishes the target. Whole-app Quit
 and updates save every participating window before releasing worker ownership.
+Close-to-tray, and closing on macOS, hide only the last open vault's main
+window. With another vault open, closing a main window closes its vault, since
+the tray can't reach a hidden window that isn't its last-focused vault.
 A main window hidden to the tray for 15 minutes, with no popout open, is saved
 the same way and destroyed while its worker keeps syncing; anything that asks
 for the window builds it again (see `memory.md`).
