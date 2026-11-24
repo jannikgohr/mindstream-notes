@@ -233,6 +233,7 @@ doing anything, it is not a permission.
 | `pluginArtifacts.download` | the host downloads declared artifacts and verifies their pinned digest                           |
 | `nativeTools.runDeclared`  | run the plugin's declared PATH binaries, directly and never through a shell. Desktop-only        |
 | `nativeServices.run`       | run a declared binary as a long-lived local preview server. Desktop-only                         |
+| `notes.watch`              | be called when notes change (`contributes.noteEvents`), with ids and kinds, never content        |
 
 There is deliberately no `notes.write`: the app performs every note write, from
 data the plugin returns.
@@ -421,6 +422,30 @@ A note kind can set `render.requiresNativeTool` to let the host fall back to
 source-only mode before invoking its renderer. The Typst plugin pipes its
 source through `typst compile --format pdf - -` and returns a base64 PDF carrying
 all pages. Its preview service is a separate host-owned capability.
+
+## Note events (`contributes.noteEvents`, `notes.watch`)
+
+A scripted plugin can ask to be called when notes change:
+
+```json
+"noteEvents": [
+  { "on": "note.changed", "export": "noteChanged", "noteKinds": ["ink"], "settleMs": 5000 }
+]
+```
+
+The host calls the export once a note has stopped changing for `settleMs`
+(0 to 60000, default 0), with `{ noteId, kind, revision }` merged into the
+usual context. `noteKinds` limits the subscription; leave it out for every
+kind. Each export may be used by one subscription.
+
+- Events arrive at least once, in the order notes last changed. Make your
+  handler safe to run twice for the same revision.
+- When the plugin is enabled, and again whenever its settings change, it is
+  told about every existing note of its kinds, so it can catch up on work it
+  skipped. Disabling it forgets where it was.
+- Trashing or deleting a note sends nothing.
+- A handler that fails is logged and not retried.
+- The browser delivers events only in the tab that has the vault open.
 
 ## Source editor language modes
 

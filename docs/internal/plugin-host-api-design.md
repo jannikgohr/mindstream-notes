@@ -108,8 +108,8 @@ transfer more effectively than mirroring every small helper in the host.
 
 ## Note events, jobs and ink pages
 
-Decided on 2026-11-20 with handwriting recognition as the first user. None of
-this is implemented yet. Every contract here is implemented in both hosts,
+Decided on 2026-11-20 with handwriting recognition as the first user. Note
+events are implemented; the rest is not yet. Every contract here is implemented in both hosts,
 the Rust backend and `src/lib/plugins/browser-host.ts`, with mirrored tests,
 so neither host gets a contract the other cannot meet. iOS is out of scope.
 
@@ -130,35 +130,39 @@ to turn recognition on in one place.
 
 The cursor and job tables and the queue rules (claiming, backoff, dedupe,
 limits) are in `storage-core`, which the browser also runs in its SQLite
-worker. Only the loop that runs jobs and the settle timer exist once per host.
+worker, and so is settling. Only the loops that call plugins exist once per
+host.
 
 ### Note events
 
-A plugin subscribes in its manifest and needs `notes.watch`:
+A plugin subscribes with a contribution, which needs `notes.watch`:
 
 ```json
-"events": [
+"noteEvents": [
   { "on": "note.changed", "export": "noteChanged", "noteKinds": ["ink"], "settleMs": 5000 }
 ]
 ```
 
-- One event per note, carrying `noteId`, `kind`, `revision` and
-  `origin: "local" | "sync"`. No content: knowing that a note changed and
-  reading what is in it are separate grants.
+- One event per note, carrying `noteId`, `kind` and `revision`. No content:
+  knowing that a note changed and reading what is in it are separate grants.
+  There is no local or sync origin, because the recognizer treats both alike.
 - The host holds a note's events until nothing in it has changed for
   `settleMs`, then delivers one event for the latest revision. Editor saves
   and sync writes settle the same way.
-- Delivery uses a durable cursor per plugin and vault, in the vault's local
-  database, and is at least once. Handlers must tolerate repeats. Each note
-  row carries a change sequence number, set in the same transaction as every
-  note write, sync included; a write path that skips it silently loses
-  events. A migration numbers existing notes. The cursor only moves past
-  notes whose event was delivered, so a note still settling holds it back.
+- Delivery uses a durable cursor per plugin export and vault, in the vault's
+  local database, and is at least once. Handlers must tolerate repeats.
+  Triggers give each note row a change number and time on every content
+  write, so no write path, sync included, can skip them. A migration numbers
+  existing notes. The cursor only moves past notes whose event was delivered,
+  so a note still settling holds it back. A handler that fails is logged and
+  the cursor moves on.
 - A new cursor starts at the beginning, so enabling a plugin delivers every
-  existing note of its kinds. The host also resets the cursor when one of
-  the plugin's settings changes or it becomes the active recognizer, so
-  notes skipped while it was unconfigured or inactive are delivered again.
-  A reset discards the cursor commit of any delivery already in flight.
+  existing note of its kinds. The cursor also stores a hash of the plugin's
+  effective settings and starts over when they change, however they changed,
+  so notes skipped while it was unconfigured are delivered again. Becoming
+  the active recognizer will start it over the same way. Starting over gives
+  the cursor a new generation, and a delivery already in flight cannot move
+  the new cursor.
 - Trashing or deleting a note sends no event.
 - When a handler fails with `queue-full`, the cursor stays put and the event
   is delivered again once the queue has room. A large backlog is read in

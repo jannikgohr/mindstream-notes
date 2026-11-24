@@ -29,6 +29,7 @@ import type {
   DiagnosticSyntaxId
 } from '$lib/diagnostics/syntax';
 import type { PluginPermission } from './generated/PluginPermission';
+import type { NoteEventDecl } from './generated/NoteEventDecl';
 import type { ArtifactDecl } from './generated/ArtifactDecl';
 import type { ArtifactKind } from './generated/ArtifactKind';
 import type { NativeServiceDecl } from './generated/NativeServiceDecl';
@@ -104,7 +105,8 @@ export const KNOWN_PLUGIN_PERMISSIONS = [
   'pluginStorage.read',
   'pluginStorage.write',
   'nativeTools.runDeclared',
-  'nativeServices.run'
+  'nativeServices.run',
+  'notes.watch'
 ] as const satisfies readonly PluginPermission[];
 
 /**
@@ -134,7 +136,8 @@ export const CONTRIBUTION_POINTS = {
   artifacts: 'pluginArtifacts.download',
   nativeTools: 'nativeTools.runDeclared',
   nativeServices: 'nativeServices.run',
-  textCheckers: 'textCheckers.contribute'
+  textCheckers: 'textCheckers.contribute',
+  noteEvents: 'notes.watch'
 } as const satisfies Record<string, PluginPermission | null>;
 
 /** The name of a contribution point, i.e. a key of `contributes`. */
@@ -879,6 +882,7 @@ export interface PluginContributions {
   documentation?: PluginDocSection[];
   /** Toolbar buttons the plugin places into host surfaces (file-tree, …). */
   toolbar?: PluginToolbarButton[];
+  noteEvents?: NoteEventDecl[];
 }
 
 /**

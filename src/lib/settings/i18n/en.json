@@ -1016,6 +1016,7 @@
     "plugins.permissions.none": "No special permissions",
     "plugins.permission.notes.create": "Create notes from its templates",
     "plugins.permission.notes.read": "Read your notes' metadata (title, tags, folder)",
+    "plugins.permission.notes.watch": "Be told when notes change",
     "plugins.permission.pluginArtifacts.download": "Download verified plugin artifacts",
     "plugins.permission.pluginStorage.read": "Read its isolated plugin data",
     "plugins.permission.pluginStorage.write": "Write its isolated plugin data",

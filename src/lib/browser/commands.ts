@@ -21,6 +21,7 @@ import type { Version, VersionAction, VersionSummary } from '../api/history';
 import type { SaveSignatureInput, SignatureRecord } from '../api/signatures';
 import type { BatchCounts, TreeItemRef } from '../api/tree-batch';
 import type { DemoNote } from '../api/onboarding';
+import type { PendingNoteEvents } from '../api/plugin-events';
 
 type Operation<A, R> = { args: A; result: R };
 type Empty = Record<string, never>;
@@ -93,6 +94,22 @@ export interface BrowserCommands {
     { noteId: string; yrsState: number[] },
     void
   >;
+  plugin_events_pending: Operation<
+    {
+      pluginId: string;
+      export: string;
+      settings: Record<string, unknown>;
+      noteKinds?: string[];
+      settleMs: number;
+      limit: number;
+    },
+    PendingNoteEvents
+  >;
+  plugin_events_commit: Operation<
+    { pluginId: string; export: string; generation: string; revision: number },
+    void
+  >;
+  plugin_events_forget: Operation<{ pluginId: string }, void>;
 }
 export type BrowserCommand = keyof BrowserCommands;
 export type BrowserRequest = {
@@ -138,7 +155,10 @@ const commands = {
   pdf_note_needs_text: true,
   set_pdf_text: true,
   pdf_page_text: true,
-  drawing_save_ink_state: true
+  drawing_save_ink_state: true,
+  plugin_events_pending: true,
+  plugin_events_commit: true,
+  plugin_events_forget: true
 } satisfies Record<BrowserCommand, true>;
 export function isBrowserCommand(command: unknown): command is BrowserCommand {
   return typeof command === 'string' && Object.hasOwn(commands, command);

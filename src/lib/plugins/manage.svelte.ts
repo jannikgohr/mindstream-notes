@@ -15,6 +15,7 @@
  * live) and persists to the backend when available.
  */
 
+import { pluginEventsForget } from '$lib/api/plugin-events';
 import { isTauri } from '$lib/api/core';
 import {
   pluginsApprove,
@@ -172,6 +173,8 @@ export async function setPluginEnabledAdmin(
   setPluginEnabled(id, enabled);
   if (!isTauri()) {
     saveBrowserPluginEnabled(id, enabled);
+    // As the backend does: a disabled plugin starts over when enabled again.
+    if (!enabled) await pluginEventsForget(id);
     return;
   }
   try {
