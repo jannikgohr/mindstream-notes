@@ -153,8 +153,10 @@
       const full = await loadNoteVersion(summary.id);
       // Desktop markdown: rich modal (current / diff / old tabs). Mobile and
       // non-markdown kinds: inline detail.
-      if (isMobile() || noteKind !== 'markdown') {
+      if (noteKind !== 'markdown') {
         detail = { summary, body: full.body, current: '' };
+      } else if (isMobile()) {
+        detail = { summary, body: full.body, current: await currentSnapshot() };
       } else {
         const current = await currentSnapshot();
         modal = { summary, oldMarkdown: full.body, currentMarkdown: current };

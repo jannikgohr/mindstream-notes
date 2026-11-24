@@ -210,6 +210,13 @@ describe('maskRanges', () => {
     expect(masked).toBe('run        now');
   });
 
+  it('keeps offsets around an emoji, which is two UTF-16 units', () => {
+    const text = '🎉 `a🎉` Wrogn';
+    const masked = maskRanges(text, ignoreRanges(text));
+    expect(masked).toHaveLength(text.length);
+    expect(masked).toBe(`🎉 ${' '.repeat(5)} Wrogn`);
+  });
+
   it('keeps newlines so paragraph structure survives', () => {
     const text = ['before', '```js', 'const x = 1;', '```', 'after'].join('\n');
     const masked = maskRanges(text, ignoreRanges(text));

@@ -26,6 +26,23 @@ describe('resolveDestinationPageIndex', () => {
     expect(await resolveDestinationPageIndex(doc, [REF, 'XYZ'])).toBe(4);
   });
 
+  it('resolves zero-based page indices in explicit and named destinations', async () => {
+    const doc = makeDoc({
+      getDestination: vi.fn().mockResolvedValue([4, { name: 'Fit' }])
+    });
+    expect(await resolveDestinationPageIndex(doc, [0, { name: 'Fit' }])).toBe(
+      0
+    );
+    expect(await resolveDestinationPageIndex(doc, 'chapter-2')).toBe(4);
+  });
+
+  it('rejects invalid numeric page indices', async () => {
+    const doc = makeDoc({});
+    for (const value of [-1, 1.5, NaN, Infinity]) {
+      expect(await resolveDestinationPageIndex(doc, [value])).toBeNull();
+    }
+  });
+
   it('resolves a named destination via getDestination', async () => {
     const getDestination = vi.fn().mockResolvedValue([REF]);
     const getPageIndex = vi.fn().mockResolvedValue(2);

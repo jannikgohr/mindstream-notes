@@ -89,7 +89,10 @@ export async function buildPageTextIndex(
     if (typeof item.str !== 'string') continue;
     const str = item.str;
     if (str.length === 0) {
-      if (item.hasEOL) prevEndedWithSpace = true;
+      if (item.hasEOL && !prevEndedWithSpace) {
+        text += ' ';
+        prevEndedWithSpace = true;
+      }
       continue;
     }
 
