@@ -238,7 +238,8 @@ export function excludeIgnored<T extends TextRange>(
  */
 export function maskRanges(text: string, ranges: TextRange[]): string {
   if (ranges.length === 0) return text;
-  const chars = [...text];
+  // Code units, not code points: the ranges are string offsets.
+  const chars = text.split('');
   for (const { from, to } of ranges) {
     for (let i = Math.max(0, from); i < Math.min(chars.length, to); i++) {
       // Newlines survive so line structure — and paragraph splitting — is
