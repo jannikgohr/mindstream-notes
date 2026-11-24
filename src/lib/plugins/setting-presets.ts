@@ -26,10 +26,14 @@ export interface SettingsPreset {
   values: Record<string, unknown>;
 }
 
-function settingIds(pluginId: string): string[] {
+function settings(pluginId: string) {
   return pluginSettingsSections()
     .filter((ref) => ref.pluginId === pluginId)
-    .flatMap((ref) => ref.contribution.settings.map((setting) => setting.id));
+    .flatMap((ref) => ref.contribution.settings);
+}
+
+function settingIds(pluginId: string): string[] {
+  return settings(pluginId).map((setting) => setting.id);
 }
 
 export function settingPresets(pluginId: string): SettingsPreset[] {
@@ -54,11 +58,10 @@ function select(pluginId: string, name: string | undefined) {
 }
 
 function matches(pluginId: string, preset: SettingsPreset): boolean {
-  return settingIds(pluginId).every(
-    (id) =>
-      id in preset.values &&
-      JSON.stringify(preset.values[id]) ===
-        JSON.stringify(getSettingValue(pluginSettingId(pluginId, id)))
+  return settings(pluginId).every(
+    ({ id, default: fallback }) =>
+      JSON.stringify(id in preset.values ? preset.values[id] : fallback) ===
+      JSON.stringify(getSettingValue(pluginSettingId(pluginId, id)))
   );
 }
 

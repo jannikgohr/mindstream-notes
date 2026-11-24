@@ -61,6 +61,25 @@ describe('buildPageTextIndex', () => {
     expect(index.text).toBe('ab');
   });
 
+  it('keeps words separated across empty end-of-line items', async () => {
+    const index = await buildPageTextIndex(
+      fakePage([
+        item('Hello', 0, 700, 50),
+        { str: '', hasEOL: true },
+        item('World', 0, 680, 50)
+      ])
+    );
+
+    expect(index.text).toBe('hello world');
+    expect(index.segments[1]).toMatchObject({ start: 6, end: 11 });
+    const [match] = findMatchesInPage(index, 0, 'hello world');
+    expect(match.rects).toEqual([
+      { x: 0, y: 700, width: 50, height: 10 },
+      { x: 0, y: 680, width: 50, height: 10 }
+    ]);
+    expect(findMatchesInPage(index, 0, 'helloworld')).toEqual([]);
+  });
+
   it('falls back to the transform font size when height is missing', async () => {
     const index = await buildPageTextIndex(
       fakePage([{ str: 'x', transform: [12, 0, 0, 12, 5, 700], width: 12 }])
