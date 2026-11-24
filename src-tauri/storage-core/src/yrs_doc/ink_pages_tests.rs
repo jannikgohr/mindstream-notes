@@ -56,3 +56,45 @@ fn reads_the_pages_and_strokes_the_editor_wrote() {
         );
     }
 }
+
+fn note_with_stroke_at(y: f32, schema: Option<f64>) -> Vec<u8> {
+    use yrs::{Array, Map, MapPrelim, Transact};
+    let mut payload = vec![2];
+    payload.extend(0xff00_0000u32.to_le_bytes());
+    payload.extend(4f32.to_le_bytes());
+    payload.extend(1u32.to_le_bytes());
+    payload.extend(10f32.to_le_bytes());
+    payload.extend(y.to_le_bytes());
+    payload.extend(1f32.to_le_bytes());
+    let doc = yrs::Doc::new();
+    let strokes = doc.get_or_insert_array("strokes");
+    let meta = doc.get_or_insert_map("ink:meta");
+    {
+        let mut txn = doc.transact_mut();
+        strokes.push_back(
+            &mut txn,
+            MapPrelim::from([
+                ("id".to_string(), yrs::Any::from("s")),
+                ("tombstoned".to_string(), yrs::Any::from(false)),
+                ("payload".to_string(), yrs::Any::from(payload)),
+            ]),
+        );
+        if let Some(schema) = schema {
+            meta.insert(&mut txn, "schema", schema);
+        }
+    }
+    super::encode_state(&doc)
+}
+
+#[test]
+fn a_stroke_far_below_old_pages_does_not_ask_for_millions_of_them() {
+    for y in [1e9, 1e25, f32::MAX] {
+        assert_eq!(ink_pages(&note_with_stroke_at(y, None)).len(), 1002, "{y}");
+    }
+}
+
+#[test]
+fn a_note_from_a_newer_editor_has_no_pages() {
+    assert_eq!(ink_pages(&note_with_stroke_at(10.0, Some(2.0))).len(), 2);
+    assert!(ink_pages(&note_with_stroke_at(10.0, Some(3.0))).is_empty());
+}

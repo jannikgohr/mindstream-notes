@@ -8,6 +8,7 @@ import {
 } from './document';
 import { pageCountForContentMaxY, pointToSegmentDistanceSq } from './page';
 import { smoothStroke, strokeSmoothing } from './stroke-smoothing';
+import { encodePayloadV2 } from './stroke-codec';
 
 function pointPairs(doc: InkDocument): number[][] {
   return doc
@@ -807,7 +808,19 @@ describe('page strokes read by the Rust host', () => {
       replaced.set('tombstoned', false);
       replaced.set('pageId', 'b');
       replaced.set('payload', v1);
-      ink.doc.getArray('strokes').push([legacy, replaced]);
+      // An older editor's stroke has no page and document coordinates.
+      const unowned = new Y.Map<unknown>();
+      unowned.set('id', 's6');
+      unowned.set('tombstoned', false);
+      unowned.set(
+        'payload',
+        encodePayloadV2({
+          color: 0xff0000ff,
+          width: 2,
+          points: [point(200, bTop + 10), point(240, bTop + 20)]
+        })
+      );
+      ink.doc.getArray('strokes').push([legacy, replaced, unowned]);
     });
     return ink;
   }
