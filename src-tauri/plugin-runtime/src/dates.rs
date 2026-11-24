@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, Local, LocalResult, TimeZone, Timelike};
 
 /// A point in time as a plugin hands it over.
 #[derive(Debug, Clone, PartialEq)]
@@ -85,13 +85,16 @@ fn add_months(dt: DateTime<Local>, months: i64) -> Option<DateTime<Local>> {
     let year = i32::try_from(total.div_euclid(12)).ok()?;
     let month0 = total.rem_euclid(12) as u32;
     let day = dt.day().min(days_in_month(year, month0 + 1));
-    // A local time skipped by a DST change has no single answer; keep the
-    // original rather than guess, as before.
+    // A local time that happens twice takes the first, as a JS `Date` does. One
+    // skipped by a DST change has no answer; keep the original, as the browser
+    // host does.
     Some(
-        Local
-            .with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second())
-            .single()
-            .unwrap_or(dt),
+        match Local.with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second()) {
+            LocalResult::Single(t) => t,
+            // chrono doesn't promise which of the two comes first.
+            LocalResult::Ambiguous(a, b) => a.min(b),
+            LocalResult::None => dt,
+        },
     )
 }
 
