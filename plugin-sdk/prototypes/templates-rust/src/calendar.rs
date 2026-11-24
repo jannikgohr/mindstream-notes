@@ -1,7 +1,7 @@
 //! Guest-local comparison of the current host date contract.
 //! Algorithms/token tables copied from plugin-runtime/src/dates.rs; intentionally
 //! retains 24-hour day/week shifts and original-time fallback for DST gaps/folds.
-use chrono::{DateTime, Datelike, TimeZone, Timelike};
+use chrono::{DateTime, Datelike, LocalResult, TimeZone, Timelike};
 use chrono_tz::Tz;
 use std::fmt::Write as _;
 
@@ -65,13 +65,15 @@ fn add_months(dt: DateTime<Tz>, months: i64) -> Option<DateTime<Tz>> {
     let year = i32::try_from(total.div_euclid(12)).ok()?;
     let month0 = total.rem_euclid(12) as u32;
     let day = dt.day().min(days_in_month(year, month0 + 1));
-    // A local time skipped by a DST change has no single answer; keep the
-    // original rather than guess, as before.
+    // A local time that happens twice takes the first, as a JS `Date` does. One
+    // skipped by a DST change has no answer; keep the original, as the hosts do.
     Some(
-        dt.timezone()
-            .with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second())
-            .single()
-            .unwrap_or(dt),
+        match dt.timezone().with_ymd_and_hms(year, month0 + 1, day, dt.hour(), dt.minute(), dt.second()) {
+            LocalResult::Single(t) => t,
+            // chrono doesn't promise which of the two comes first.
+            LocalResult::Ambiguous(a, b) => a.min(b),
+            LocalResult::None => dt,
+        },
     )
 }
 
