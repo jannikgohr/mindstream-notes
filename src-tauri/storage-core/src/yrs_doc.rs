@@ -95,13 +95,22 @@ pub struct InkPage {
 
 const INK_PAGE_GAP: f64 = 72.0;
 const INK_A4: (f64, f64) = (1190.0, 1684.0);
+const INK_LEGACY_MAX_PAGES: f64 = 1000.0;
+/// `INK_SCHEMA` in `page-document.ts`. The editor refuses newer notes.
+const INK_SCHEMA: f64 = 2.0;
 
 /// The visible pages of an ink note and the strokes on each, as the editor's
 /// `InkDocument.pages()` and `pageStrokes()` read them. Notes from before
 /// pages were stored get A4 pages, at least two and one past the last stroke,
-/// and a stroke shows on every page its bounds reach.
+/// and a stroke shows on every page its bounds reach. A note written by a
+/// newer editor has no pages here.
 pub fn ink_pages(state: &[u8]) -> Vec<InkPage> {
     let doc = load(state);
+    let meta = doc.get_or_insert_map("ink:meta");
+    if matches!(meta.get(&doc.transact(), "schema"), Some(Out::Any(Any::Number(n))) if n > INK_SCHEMA)
+    {
+        return Vec::new();
+    }
     let records = doc.get_or_insert_map("ink:pages");
     let order = doc.get_or_insert_map("ink:pageOrder");
     let deleted = doc.get_or_insert_map("ink:deletedPages");
@@ -178,8 +187,13 @@ pub fn ink_pages(state: &[u8]) -> Vec<InkPage> {
             .iter()
             .flat_map(|(_, stroke)| stroke.points.iter().map(|p| p.y as f64))
             .fold(0.0, f64::max);
+        // A stroke far below the pages, e.g. a corrupt one from another
+        // device, must not ask for millions of pages.
         let count = if max_y.is_finite() && max_y > 0.0 {
-            ((max_y / (INK_A4.1 + INK_PAGE_GAP)).floor() as usize + 2).max(2)
+            ((max_y / (INK_A4.1 + INK_PAGE_GAP))
+                .floor()
+                .min(INK_LEGACY_MAX_PAGES) as usize)
+                + 2
         } else {
             2
         };
