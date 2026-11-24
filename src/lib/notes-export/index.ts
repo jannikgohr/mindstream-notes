@@ -308,7 +308,7 @@ async function exportNote(
   const note = await api.loadNote(summary.id);
   switch (note.note_kind) {
     case 'markdown': {
-      const written = await exportMarkdown(
+      const { basename: _, ...written } = await exportMarkdown(
         write,
         assets,
         note,
@@ -331,20 +331,20 @@ async function exportNote(
     }
     case 'kanban': {
       const board = readExportBoard(note.yrs_state);
-      const name = sanitizeName(note.title);
       // Bundle description assets using the Markdown export path. Keep JSON
       // alongside it so IDs, ordering, labels and card metadata survive too.
-      const written = await exportMarkdown(
+      const { basename, ...written } = await exportMarkdown(
         write,
         assets,
         { ...note, body: boardMarkdown(board, false) },
         parentDir,
         takenFor
       );
+      const stem = basename.slice(0, -'.md'.length);
       await write(
         joinRel(
           parentDir,
-          dedupeAgainst(takenFor(parentDir), `${name}.kanban.json`)
+          dedupeAgainst(takenFor(parentDir), `${stem}.kanban.json`)
         ),
         new TextEncoder().encode(JSON.stringify(board, null, 2))
       );
@@ -377,7 +377,7 @@ async function exportMarkdown(
   note: Note,
   parentDir: string,
   takenFor: (dir: string) => Set<string>
-): Promise<AssetWriteSummary> {
+): Promise<AssetWriteSummary & { basename: string }> {
   // 1. Resolve a per-folder filename for the markdown file.
   const fileBasename = dedupeAgainst(
     takenFor(parentDir),
@@ -444,7 +444,7 @@ async function exportMarkdown(
     joinRel(parentDir, fileBasename),
     new TextEncoder().encode(content)
   );
-  return { assets_written: assetsWritten, errors };
+  return { assets_written: assetsWritten, errors, basename: fileBasename };
 }
 
 async function exportFreeform(
