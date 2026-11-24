@@ -71,9 +71,25 @@ fn subscriptions(app: &AppHandle) -> AppResult<Vec<Subscription>> {
     })
 }
 
+fn runnable(app: &AppHandle, plugin_id: &str) -> bool {
+    let Ok(third_party_dir) = discovery::third_party_plugins_dir(app) else {
+        return false;
+    };
+    app.state::<crate::vault_jobs::Jobs>().enter().is_ok()
+        && app
+            .state::<Db>()
+            .with_conn(|conn| load_runnable(conn, &third_party_dir, plugin_id, None))
+            .is_ok()
+}
+
 /// One pass over every subscription. A handler that fails still moves the
 /// cursor: the event was delivered, and retrying it would block the plugin.
 async fn deliver(app: &AppHandle) -> AppResult<()> {
+    // Held for the pass, so pausing vault work waits for it, and a paused
+    // vault skips the pass instead of failing every event.
+    let Ok(_job) = app.state::<crate::vault_jobs::Jobs>().enter() else {
+        return Ok(());
+    };
     for Subscription {
         plugin_id,
         event,
@@ -97,6 +113,11 @@ async fn deliver(app: &AppHandle) -> AppResult<()> {
                 .map_err(|e| crate::error::AppError::InvalidArg(e.to_string()))?;
             if let Err(err) = run_export(app, plugin_id.clone(), event.export.clone(), input).await
             {
+                // The export never ran: the plugin was turned off or needs
+                // approval, or vault work paused. Keep the event for later.
+                if !runnable(app, &plugin_id) {
+                    break;
+                }
                 log::warn!(
                     "[plugins] {plugin_id} {} failed for {}: {err}",
                     event.export,

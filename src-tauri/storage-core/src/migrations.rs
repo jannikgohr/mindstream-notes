@@ -1009,8 +1009,10 @@ const MIGRATIONS: &[Migration] = &[
         to: 38,
         // Plugin note events. Every content write gives the note the next
         // change number and the time it changed, in milliseconds. Triggers
-        // set both so that no write path, sync included, can skip them.
-        // Existing notes are numbered in row order and count as long settled.
+        // set both so that no write path, sync included, can skip them. The
+        // number comes from a counter rather than the highest row, which a
+        // purge would lower and so hand out again. Existing notes are
+        // numbered in row order and count as long settled.
         //
         // A cursor is how far one plugin export has been told about changes,
         // under a hash of the plugin's settings. Its generation changes when
@@ -1019,10 +1021,13 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE notes ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE notes ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
             UPDATE notes SET change_seq = rowid;
-            CREATE INDEX idx_notes_change_seq ON notes(change_seq);
+            CREATE INDEX idx_notes_change_seq ON notes(change_seq, note_kind);
+            CREATE TABLE note_change_counter (value INTEGER NOT NULL);
+            INSERT INTO note_change_counter(value) SELECT COALESCE(MAX(change_seq), 0) FROM notes;
             CREATE TRIGGER note_changed_insert AFTER INSERT ON notes BEGIN
+                UPDATE note_change_counter SET value = value + 1;
                 UPDATE notes SET
-                    change_seq = (SELECT MAX(change_seq) FROM notes) + 1,
+                    change_seq = (SELECT value FROM note_change_counter),
                     changed_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
                 WHERE id = new.id;
             END;
@@ -1032,8 +1037,9 @@ const MIGRATIONS: &[Migration] = &[
                   OR old.yrs_state IS NOT new.yrs_state
                   OR old.note_kind IS NOT new.note_kind
             BEGIN
+                UPDATE note_change_counter SET value = value + 1;
                 UPDATE notes SET
-                    change_seq = (SELECT MAX(change_seq) FROM notes) + 1,
+                    change_seq = (SELECT value FROM note_change_counter),
                     changed_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
                 WHERE id = new.id;
             END;

@@ -152,10 +152,13 @@ A plugin subscribes with a contribution, which needs `notes.watch`:
 - Delivery uses a durable cursor per plugin export and vault, in the vault's
   local database, and is at least once. Handlers must tolerate repeats.
   Triggers give each note row a change number and time on every content
-  write, so no write path, sync included, can skip them. A migration numbers
-  existing notes. The cursor only moves past notes whose event was delivered,
-  so a note still settling holds it back. A handler that fails is logged and
-  the cursor moves on.
+  write, so no write path, sync included, can skip them. The numbers come
+  from a counter, since the highest row's number drops when a note is purged
+  and would be handed out again. A migration numbers existing notes. The
+  cursor only moves past notes whose event was delivered, so a note still
+  settling holds it back. A handler that fails is logged and the cursor
+  moves on; an export that could not run, because the plugin was turned off,
+  awaits approval or vault work paused, keeps its event.
 - A new cursor starts at the beginning, so enabling a plugin delivers every
   existing note of its kinds. The cursor also stores a hash of the plugin's
   effective settings and starts over when they change, however they changed,
@@ -163,7 +166,10 @@ A plugin subscribes with a contribution, which needs `notes.watch`:
   the active recognizer will start it over the same way. Starting over gives
   the cursor a new generation, and a delivery already in flight cannot move
   the new cursor.
-- Trashing or deleting a note sends no event.
+- Trashing, restoring or deleting a note sends no event, so a change made
+  just before trashing waits for the restored note's next change. Restores
+  only touch trash columns, and a restored folder restores its notes without
+  touching them at all.
 - When a handler fails with `queue-full`, the cursor stays put and the event
   is delivered again once the queue has room. A large backlog is read in
   batches instead of being dropped.

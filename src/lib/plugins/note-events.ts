@@ -10,7 +10,7 @@ import {
   pluginEventsCommit,
   pluginEventsPending
 } from '$lib/api/plugin-events';
-import { pluginNoteEvents } from './registry.svelte';
+import { pluginById, pluginNoteEvents } from './registry.svelte';
 import { browserPluginSettings, runPluginScript } from './run-script';
 
 /** `TICK` and `BATCH` in events.rs. */
@@ -35,6 +35,8 @@ export async function deliverNoteEvents(): Promise<void> {
       try {
         await runPluginScript(pluginId, event.export, { ...change });
       } catch (err) {
+        // Turned off meanwhile, so the export never ran. Keep the event.
+        if (!pluginById(pluginId)?.enabled) break;
         console.warn(
           `[plugins] ${pluginId} ${event.export} failed for ${change.noteId}`,
           err
