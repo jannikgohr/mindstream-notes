@@ -144,6 +144,21 @@ describe('setting presets', () => {
     expect(selectedPreset(PLUGIN)).toBeUndefined();
   });
 
+  it('treats a setting a preset leaves out as at its default', async () => {
+    // Saved before the plugin added `tags`.
+    await setSettingValue(id('$presets'), [
+      { name: 'Older', values: { depth: 3 } }
+    ]);
+    await setSettingValue(id('tags'), false);
+
+    await applyPreset(PLUGIN, 'Older');
+    expect(getSettingValue(id('tags'))).toBe(true);
+    expect(presetChanged(PLUGIN)).toBe(false);
+
+    await resetSettingValue(id('$preset'));
+    expect(selectedPreset(PLUGIN)).toBe('Older');
+  });
+
   it('ignores stored presets it cannot read', async () => {
     await setSettingValue(id('$presets'), [{ name: 'ok', values: {} }, 7, {}]);
     expect(settingPresets(PLUGIN)).toEqual([{ name: 'ok', values: {} }]);
