@@ -135,6 +135,10 @@ pub enum PluginPermission {
     /// Run a declared binary as a long-lived local preview server.
     #[serde(rename = "nativeServices.run")]
     NativeServicesRun,
+    /// Be called when notes change (`contributes.noteEvents`). Ids and kinds
+    /// only; reading the note is a separate grant.
+    #[serde(rename = "notes.watch")]
+    NotesWatch,
 }
 
 impl PluginPermission {
@@ -149,6 +153,7 @@ impl PluginPermission {
             Self::PluginStorageWrite => "pluginStorage.write",
             Self::NativeToolsRunDeclared => "nativeTools.runDeclared",
             Self::NativeServicesRun => "nativeServices.run",
+            Self::NotesWatch => "notes.watch",
         }
     }
 }
@@ -184,6 +189,30 @@ pub struct ArtifactDecl {
     /// Optional exact byte length, checked alongside the digest.
     #[ts(optional, type = "number")]
     pub size_bytes: Option<u64>,
+}
+
+/// The longest a subscription may wait for a note to stop changing.
+pub const MAX_SETTLE_MS: u32 = 60_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[ts(export, export_to = "../../src/lib/plugins/generated/")]
+pub enum NoteEventKind {
+    #[serde(rename = "note.changed")]
+    NoteChanged,
+}
+
+/// Calls `export` once a note of one of `noteKinds` (any, when absent) has
+/// not changed for `settleMs`, with its id, kind and revision.
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export, export_to = "../../src/lib/plugins/generated/")]
+pub struct NoteEventDecl {
+    pub on: NoteEventKind,
+    pub export: String,
+    #[ts(optional)]
+    pub note_kinds: Option<Vec<String>>,
+    #[ts(optional)]
+    pub settle_ms: Option<u32>,
 }
 
 /// A PATH-resolved binary the plugin may run one shot at a time.
@@ -303,6 +332,8 @@ pub struct BackendContributions {
     pub native_tools: Vec<NativeToolDecl>,
     #[serde(default)]
     pub native_services: Vec<NativeServiceDecl>,
+    #[serde(default)]
+    pub note_events: Vec<NoteEventDecl>,
 }
 
 /// A plugin manifest, as far as the backend is concerned.
@@ -363,6 +394,8 @@ pub enum ManifestError {
     UnsafeEntry(String),
     #[error("manifest.entry is only valid for a scripted runtime")]
     UnexpectedEntry,
+    #[error("contributes.noteEvents[{index}]: {reason}")]
+    BadNoteEvent { index: usize, reason: &'static str },
 }
 
 /// A plugin id: dotted, lowercase, at least two segments.
@@ -391,6 +424,14 @@ fn is_valid_id(id: &str) -> bool {
         }
     }
     segments >= 2
+}
+
+/// `EXPORT_NAME_RE` in `validation.ts`.
+fn is_export_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A safe scripted entry: one path segment with the runtime's extension.
@@ -445,6 +486,31 @@ impl Manifest {
             // mistake worth surfacing rather than silently ignoring.
             (None, Some(_)) => return Err(ManifestError::UnexpectedEntry),
             _ => {}
+        }
+        let mut exports = std::collections::HashSet::new();
+        for (index, event) in manifest.contributes.note_events.iter().enumerate() {
+            let reason = if !manifest.runtime.is_scripted() {
+                Some("needs a scripted runtime")
+            } else if !manifest.declares(PluginPermission::NotesWatch) {
+                Some("needs the notes.watch permission")
+            } else if !is_export_name(&event.export) {
+                Some("export must be letters, digits and underscores")
+            } else if !exports.insert(&event.export) {
+                Some("another subscription uses the same export")
+            } else if event.settle_ms.unwrap_or(0) > MAX_SETTLE_MS {
+                Some("settleMs is at most 60000")
+            } else if event
+                .note_kinds
+                .as_ref()
+                .is_some_and(|kinds| kinds.is_empty() || kinds.iter().any(String::is_empty))
+            {
+                Some("noteKinds must list note kinds")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(ManifestError::BadNoteEvent { index, reason });
+            }
         }
         Ok(manifest)
     }
@@ -508,6 +574,67 @@ mod tests {
 
     fn parse(v: serde_json::Value) -> Result<Manifest, ManifestError> {
         Manifest::parse(v.to_string().as_bytes())
+    }
+
+    #[test]
+    fn note_events_need_code_the_permission_and_sane_values() {
+        let watcher = |event: serde_json::Value| {
+            let mut v = base();
+            v["runtime"] = "wasm".into();
+            v["entry"] = "plugin.wasm".into();
+            v["permissions"] = serde_json::json!(["notes.watch"]);
+            v["contributes"] = serde_json::json!({ "noteEvents": [event] });
+            v
+        };
+        let event = serde_json::json!({
+            "on": "note.changed", "export": "noteChanged", "noteKinds": ["ink"], "settleMs": 5000
+        });
+        let m = parse(watcher(event.clone())).unwrap();
+        assert_eq!(m.contributes.note_events[0].settle_ms, Some(5000));
+
+        let mut unpermitted = watcher(event.clone());
+        unpermitted["permissions"] = serde_json::json!([]);
+        let mut declarative = watcher(event.clone());
+        declarative["runtime"] = "manifest-only".into();
+        declarative.as_object_mut().unwrap().remove("entry");
+        for (manifest, why) in [
+            (unpermitted, "notes.watch"),
+            (declarative, "scripted runtime"),
+            (
+                watcher(serde_json::json!({ "on": "note.changed", "export": "no-dash" })),
+                "export",
+            ),
+            (
+                watcher(
+                    serde_json::json!({ "on": "note.changed", "export": "a", "settleMs": 60001 }),
+                ),
+                "settleMs",
+            ),
+            (
+                watcher(
+                    serde_json::json!({ "on": "note.changed", "export": "a", "noteKinds": [] }),
+                ),
+                "noteKinds",
+            ),
+            (
+                {
+                    let mut twice = watcher(event.clone());
+                    twice["contributes"]["noteEvents"] =
+                        serde_json::json!([event.clone(), event.clone()]);
+                    twice
+                },
+                "same export",
+            ),
+        ] {
+            let error = parse(manifest).unwrap_err().to_string();
+            assert!(error.contains(why), "{error}");
+        }
+        assert!(matches!(
+            parse(watcher(
+                serde_json::json!({ "on": "note.deleted", "export": "a" })
+            )),
+            Err(ManifestError::Parse(_))
+        ));
     }
 
     #[test]

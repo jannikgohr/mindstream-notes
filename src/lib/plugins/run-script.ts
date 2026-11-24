@@ -28,14 +28,22 @@ function granted(pluginId: string, permission: PluginPermission): boolean {
   return pluginById(pluginId)?.granted.includes(permission) ?? false;
 }
 
-/** The context `backend_script_context` builds, from the browser's own state. */
-function browserScriptContext(pluginId: string): Record<string, unknown> {
+/** The plugin's settings as the browser passes them to its exports. */
+export function browserPluginSettings(
+  pluginId: string
+): Record<string, unknown> {
   const settings: Record<string, unknown> = {};
   const sections = pluginById(pluginId)?.manifest.contributes.settings ?? [];
   for (const setting of sections.flatMap((section) => section.settings)) {
     const value = getSettingValue(pluginSettingId(pluginId, setting.id));
     if (value !== undefined) settings[setting.id] = value;
   }
+  return settings;
+}
+
+/** The context `backend_script_context` builds, from the browser's own state. */
+function browserScriptContext(pluginId: string): Record<string, unknown> {
+  const settings = browserPluginSettings(pluginId);
   const folders = granted(pluginId, 'notes.read')
     ? Object.values(tree.collectionsById).map((c) => ({
         id: c.id,

@@ -19,4 +19,5 @@ export type PluginPermission =
   | 'pluginStorage.read'
   | 'pluginStorage.write'
   | 'nativeTools.runDeclared'
-  | 'nativeServices.run';
+  | 'nativeServices.run'
+  | 'notes.watch';

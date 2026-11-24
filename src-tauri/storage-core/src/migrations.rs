@@ -1005,6 +1005,48 @@ const MIGRATIONS: &[Migration] = &[
             END;
         "#,
     },
+    Migration {
+        to: 38,
+        // Plugin note events. Every content write gives the note the next
+        // change number and the time it changed, in milliseconds. Triggers
+        // set both so that no write path, sync included, can skip them.
+        // Existing notes are numbered in row order and count as long settled.
+        //
+        // A cursor is how far one plugin export has been told about changes,
+        // under a hash of the plugin's settings. Its generation changes when
+        // it starts over, so a delivery that started before cannot move it.
+        sql: r#"
+            ALTER TABLE notes ADD COLUMN change_seq INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE notes ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
+            UPDATE notes SET change_seq = rowid;
+            CREATE INDEX idx_notes_change_seq ON notes(change_seq);
+            CREATE TRIGGER note_changed_insert AFTER INSERT ON notes BEGIN
+                UPDATE notes SET
+                    change_seq = (SELECT MAX(change_seq) FROM notes) + 1,
+                    changed_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+                WHERE id = new.id;
+            END;
+            CREATE TRIGGER note_changed_update AFTER UPDATE OF title, body, yrs_state, note_kind ON notes
+                WHEN old.title IS NOT new.title
+                  OR old.body IS NOT new.body
+                  OR old.yrs_state IS NOT new.yrs_state
+                  OR old.note_kind IS NOT new.note_kind
+            BEGIN
+                UPDATE notes SET
+                    change_seq = (SELECT MAX(change_seq) FROM notes) + 1,
+                    changed_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+                WHERE id = new.id;
+            END;
+            CREATE TABLE plugin_event_cursors (
+                plugin_id  TEXT NOT NULL,
+                export     TEXT NOT NULL,
+                seq        INTEGER NOT NULL,
+                generation TEXT NOT NULL,
+                settings   TEXT NOT NULL,
+                PRIMARY KEY (plugin_id, export)
+            );
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

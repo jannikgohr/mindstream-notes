@@ -23,6 +23,7 @@
 import { checksumManifest } from './canonical';
 import { pluginNoteKindId, validateManifest } from './validation';
 import { CONTRIBUTION_POINTS } from './types';
+import type { NoteEventDecl } from './generated/NoteEventDecl';
 import type {
   PluginCommandContribution,
   PluginPermission,
@@ -105,6 +106,12 @@ export interface PluginCommandRef {
 export interface PluginTextCheckerRef {
   pluginId: string;
   checker: PluginTextCheckerContribution;
+}
+
+/** A note event subscription paired with the plugin that owns it. */
+export interface PluginNoteEventRef {
+  pluginId: string;
+  event: NoteEventDecl;
 }
 
 /** A toolbar button paired with its owning plugin. */
@@ -332,6 +339,14 @@ export function pluginTextCheckers(): PluginTextCheckerRef[] {
   return contributionsOf('textCheckers').map(({ pluginId, entry }) => ({
     pluginId,
     checker: entry
+  }));
+}
+
+/** Note event subscriptions of enabled plugins granted `notes.watch`. */
+export function pluginNoteEvents(): PluginNoteEventRef[] {
+  return contributionsOf('noteEvents').map(({ pluginId, entry }) => ({
+    pluginId,
+    event: entry
   }));
 }
 

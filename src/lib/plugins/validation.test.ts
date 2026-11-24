@@ -3012,3 +3012,42 @@ describe('forward compatibility', () => {
     ).toThrow(/unknown permission "future.capability"/);
   });
 });
+
+describe('validateManifest — note events', () => {
+  const event = {
+    on: 'note.changed',
+    export: 'noteChanged',
+    noteKinds: ['ink'],
+    settleMs: 5000
+  };
+  const watcher = (...events: unknown[]) =>
+    scripted({ noteEvents: events }, ['notes.watch']);
+
+  it('accepts a subscription and refuses what the backend refuses', () => {
+    expect(validateManifest(watcher(event)).contributes.noteEvents).toEqual([
+      event
+    ]);
+    expect(() => validateManifest(scripted({ noteEvents: [event] }))).toThrow(
+      /missing the "notes.watch" permission/
+    );
+    for (const [bad, message] of [
+      [{ ...event, on: 'note.deleted' }, /on must be "note.changed"/],
+      [{ ...event, export: 'no-dash' }, /export must be a backend script/],
+      [{ ...event, settleMs: 60_001 }, /settleMs must be a whole number/],
+      [{ ...event, settleMs: 1.5 }, /settleMs must be a whole number/],
+      [{ ...event, noteKinds: [] }, /noteKinds must list note kinds/]
+    ] as const)
+      expect(() => validateManifest(watcher(bad))).toThrow(message);
+    expect(() => validateManifest(watcher(event, event))).toThrow(
+      /duplicate note event export/
+    );
+    const declarative = {
+      ...watcher(event),
+      runtime: 'manifest-only',
+      entry: undefined
+    };
+    expect(() => validateManifest(declarative)).toThrow(
+      /require a scripted runtime/
+    );
+  });
+});

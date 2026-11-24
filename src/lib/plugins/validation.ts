@@ -134,6 +134,8 @@ const SAFE_BINARY_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*(?:\.exe)?$/i;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 /** An export name: a plain identifier, the way a script looks it up. */
 const EXPORT_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** `MAX_SETTLE_MS` in `src-tauri/src/plugins/manifest.rs`. */
+const MAX_SETTLE_MS = 60_000;
 const SOURCE_LANGUAGE_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,31}$/;
 const SOURCE_EXTENSION_RE = /^[A-Za-z0-9][A-Za-z0-9_+-]{0,15}$/;
 
@@ -1851,6 +1853,51 @@ export function validateManifest(input: unknown): PluginManifest {
   for (const [i, tool] of nativeTools.entries()) {
     validateNativeTool(pluginId, tool, `nativeTools[${i}]`);
     claimId(seenNativeToolIds, tool.id, 'native tool id');
+  }
+
+  // ---- Note events -----------------------------------------------------
+  // Mirrors `Manifest::parse`, which refuses the same subscriptions. The
+  // cursor is kept per export, so two subscriptions may not share one.
+  const noteEvents = contributionList(contributes.noteEvents, 'noteEvents');
+  const seenEventExports = new Set<string>();
+  for (const [i, event] of noteEvents.entries()) {
+    const path = `noteEvents[${i}]`;
+    if (event?.on !== 'note.changed') {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.on must be "note.changed"`
+      );
+    }
+    assertExportName(pluginId, event.export, `${path}.export`);
+    claimId(seenEventExports, event.export, 'note event export');
+    if (
+      event.settleMs !== undefined &&
+      (!Number.isInteger(event.settleMs) ||
+        event.settleMs < 0 ||
+        event.settleMs > MAX_SETTLE_MS)
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.settleMs must be a whole number from 0 to ${MAX_SETTLE_MS}`
+      );
+    }
+    if (
+      event.noteKinds !== undefined &&
+      (!Array.isArray(event.noteKinds) ||
+        event.noteKinds.length === 0 ||
+        event.noteKinds.some((kind) => typeof kind !== 'string' || !kind))
+    ) {
+      throw new PluginValidationError(
+        pluginId,
+        `${path}.noteKinds must list note kinds`
+      );
+    }
+  }
+  if (noteEvents.length > 0 && !isScriptedRuntime(m.runtime)) {
+    throw new PluginValidationError(
+      pluginId,
+      'contributes noteEvents, which call backend exports and require a scripted runtime ("wasm")'
+    );
   }
 
   // ---- Native services (long-lived preview servers) --------------------
