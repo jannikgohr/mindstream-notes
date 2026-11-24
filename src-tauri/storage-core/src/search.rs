@@ -412,7 +412,12 @@ fn build_snippet(body: &str, terms: &[Vec<char>]) -> (String, Vec<MatchRange>) {
     }
 
     let body_chars: Vec<char> = body.chars().collect();
-    let body_lower: Vec<char> = lowercase_chars(body);
+    // Lowercasing can lengthen a char (İ → i̇), so keep where each came from.
+    let (body_lower, origin): (Vec<char>, Vec<usize>) = body_chars
+        .iter()
+        .enumerate()
+        .flat_map(|(i, c)| c.to_lowercase().map(move |lower| (lower, i)))
+        .unzip();
 
     let mut first_match: Option<usize> = None;
     for term in terms {
@@ -434,7 +439,7 @@ fn build_snippet(body: &str, terms: &[Vec<char>]) -> (String, Vec<MatchRange>) {
 
     let body_char_count = body_chars.len();
     let start_char = match first_match {
-        Some(c) => c.saturating_sub(SNIPPET_PRE_CHARS),
+        Some(c) => origin[c].saturating_sub(SNIPPET_PRE_CHARS),
         None => 0,
     };
     let end_char = (start_char + SNIPPET_LEN_CHARS).min(body_char_count);
@@ -500,5 +505,20 @@ mod tests {
         assert_eq!(highlighted("🎉 Party plans", "party"), ["Party"]);
         assert_eq!(highlighted("Fun 🎉🎉 times", "🎉"), ["🎉🎉"]);
         assert_eq!(highlighted("İstanbul trip", "trip"), ["trip"]);
+    }
+
+    #[test]
+    fn snippet_finds_a_match_after_chars_that_lowercase_longer() {
+        // Each İ lowercases to two chars.
+        let body = format!("{} needle", "İ".repeat(60));
+        let (snippet, matches) = build_snippet(&body, &["needle".chars().collect()]);
+        let units: Vec<u16> = snippet.encode_utf16().collect();
+        let [m] = &matches[..] else {
+            panic!("{matches:?}")
+        };
+        assert_eq!(
+            String::from_utf16(&units[m.start..m.end]).unwrap(),
+            "needle"
+        );
     }
 }
