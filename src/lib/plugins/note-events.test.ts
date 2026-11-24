@@ -16,7 +16,11 @@ vi.mock('./run-script', () => ({
 }));
 
 import { deliverNoteEvents } from './note-events';
-import { registerPlugin, resetPluginRegistry } from './registry.svelte';
+import {
+  registerPlugin,
+  resetPluginRegistry,
+  setPluginEnabled
+} from './registry.svelte';
 
 function watcher(id: string): Record<string, unknown> {
   return {
@@ -78,5 +82,25 @@ describe('deliverNoteEvents', () => {
       ['com.example.watcher', 'noteChanged', 'g', 3],
       ['com.example.watcher', 'noteChanged', 'g', 5]
     ]);
+  });
+
+  it('keeps an event whose plugin was turned off before it ran', async () => {
+    registerPlugin(watcher('com.example.watcher'));
+    api.pending.mockResolvedValue({
+      generation: 'g',
+      changes: [
+        { noteId: 'a', kind: 'ink', revision: 3 },
+        { noteId: 'b', kind: 'ink', revision: 5 }
+      ]
+    });
+    api.run.mockImplementation(async () => {
+      setPluginEnabled('com.example.watcher', false);
+      throw new Error('plugin com.example.watcher is not enabled');
+    });
+
+    await deliverNoteEvents();
+
+    expect(api.run).toHaveBeenCalledTimes(1);
+    expect(api.commit).not.toHaveBeenCalled();
   });
 });

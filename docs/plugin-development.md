@@ -443,7 +443,9 @@ kind. Each export may be used by one subscription.
 - When the plugin is enabled, and again whenever its settings change, it is
   told about every existing note of its kinds, so it can catch up on work it
   skipped. Disabling it forgets where it was.
-- Trashing or deleting a note sends nothing.
+- Trashing, restoring or deleting a note sends nothing. A change made just
+  before a note went to the trash may only be reported once the restored note
+  changes again.
 - A handler that fails is logged and not retried.
 - The browser delivers events only in the tab that has the vault open.
 

@@ -208,3 +208,21 @@ fn the_cursor_moves_only_with_its_own_generation() {
         [b.as_str(), a.as_str()]
     );
 }
+
+#[test]
+fn a_purge_does_not_hand_out_a_delivered_number_again() {
+    let conn = vault();
+    create(&conn, NoteKind::Ink);
+    let newest = create(&conn, NoteKind::Ink);
+    let all = pending(&conn, "p", "noteChanged", &set_up(), None, 0, 10).unwrap();
+    let last = all.changes.last().unwrap().revision;
+    commit(&conn, "p", "noteChanged", &all.generation, last).unwrap();
+    notes::trash(&conn, &newest).unwrap();
+    notes::purge(&conn, &newest).unwrap();
+
+    let next = create(&conn, NoteKind::Ink);
+    assert_eq!(
+        delivered(&pending(&conn, "p", "noteChanged", &set_up(), None, 0, 10).unwrap()),
+        [next.as_str()]
+    );
+}
