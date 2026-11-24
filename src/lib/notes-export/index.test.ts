@@ -218,12 +218,13 @@ describe('vault export additions', () => {
       ]
     });
     seed('board', 'kanban', '', Array.from(Y.encodeStateAsUpdate(doc)));
+    seed('board-2', 'kanban', '', Array.from(Y.encodeStateAsUpdate(doc)));
     seed('typst', 'plugin.com.mindstream.typst.document', '= Source\n');
     seed('second-typst', 'plugin.com.mindstream.typst.document', '');
     doc.destroy();
     const report = await exportVault(state.writeExportFile);
     expect(report).toMatchObject({
-      kanban_written: 1,
+      kanban_written: 2,
       typst_written: 2,
       errors: 0,
       skipped_unknown_kind: 0
@@ -238,6 +239,9 @@ describe('vault export additions', () => {
     expect(JSON.parse(outputs.get('Same title.kanban.json')!)).toMatchObject({
       cards: [{ id: 'one', users: ['alice'] }]
     });
+    // A second board of the same title keeps its pair under one name.
+    expect(outputs.has('Same title_2.md')).toBe(true);
+    expect(outputs.has('Same title_2.kanban.json')).toBe(true);
     expect(outputs.get('Same title.typ')).toBe('= Source\n');
     expect(outputs.get('Same title_2.typ')).toBe('');
   });
