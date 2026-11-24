@@ -3,9 +3,10 @@
  *
  * pdf.js returns the outline as a nested tree whose leaves point at
  * "destinations" — either an explicit array (first element is a page
- * reference) or a named destination string that has to be resolved
- * first. The navigator sidebar wants a flat list with indentation depth
- * and a resolved page index per row, so we flatten and resolve up front.
+ * reference or zero-based page index) or a named destination string that
+ * has to be resolved first. The navigator sidebar wants a flat list with
+ * indentation depth and a resolved page index per row, so we flatten and
+ * resolve up front.
  */
 
 type PdfJs = typeof import('pdfjs-dist');
@@ -41,6 +42,9 @@ export async function resolveDestinationPageIndex(
       typeof dest === 'string' ? await doc.getDestination(dest) : dest;
     if (!Array.isArray(explicit) || explicit.length === 0) return null;
     const ref = explicit[0];
+    if (typeof ref === 'number') {
+      return Number.isInteger(ref) && ref >= 0 ? ref : null;
+    }
     if (ref == null || typeof ref !== 'object') return null;
     return await doc.getPageIndex(ref as RefProxyArg);
   } catch {
