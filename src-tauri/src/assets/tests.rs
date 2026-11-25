@@ -368,6 +368,62 @@ fn startup_sweep_is_noop_when_asset_still_referenced() {
     );
     let res = db.with_conn(|c| load(c, &asset.summary.id));
     assert!(res.is_ok(), "referenced asset must not be deleted");
+
+    // A pull stores the sending device's `modified`, which can predate the
+    // last sweep. The next sweep must still see the change.
+    db.with_conn(|c| {
+        c.execute(
+            "UPDATE notes SET body = 'pulled', yrs_state = NULL,
+                              modified = '2000-01-01T00:00:00Z'
+             WHERE id = ?1",
+            params![note_id],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    assert_eq!(removed, 1, "the pulled body no longer shows the image");
+}
+
+#[test]
+fn a_sweep_only_revisits_notes_changed_since_the_last_one() {
+    let db = open_memory_for_tests();
+    let changed = make_markdown_note(&db);
+    let unchanged = make_markdown_note(&db);
+    db.with_conn(|c| store_deduped(c, &unchanged, "image/png", &[4, 2]))
+        .unwrap();
+    let queued = |db: &Db| {
+        db.with_conn(|c| {
+            let mut stmt = c.prepare("SELECT note_id FROM asset_sweep_notes")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .unwrap()
+    };
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    assert!(queued(&db).is_empty());
+
+    db.with_conn_mut(|c| {
+        update_note(
+            c,
+            UpdateNote {
+                id: changed.clone(),
+                title: None,
+                body: Some("edited".into()),
+                parent_collection_id: None,
+                position: None,
+                tags: None,
+                yrs_state: None,
+                favourite: None,
+            },
+        )
+    })
+    .unwrap();
+
+    assert_eq!(queued(&db), vec![changed]);
 }
 
 #[test]
@@ -466,6 +522,8 @@ fn markdown_cleanup_keeps_history_referenced_asset_until_history_pruned() {
         )
     })
     .unwrap();
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
     assert!(
         db.with_conn(|c| load(c, &asset.summary.id)).is_ok(),
         "history snapshot keeps the asset alive"
@@ -490,6 +548,85 @@ fn markdown_cleanup_keeps_history_referenced_asset_until_history_pruned() {
         res.is_err(),
         "asset is deleted once the last history reference is pruned"
     );
+}
+
+fn set_body(db: &Db, note_id: &str, body: &str) {
+    db.with_conn_mut(|c| {
+        update_note(
+            c,
+            UpdateNote {
+                id: note_id.into(),
+                title: None,
+                body: Some(body.into()),
+                parent_collection_id: None,
+                position: None,
+                tags: None,
+                yrs_state: None,
+                favourite: None,
+            },
+        )
+    })
+    .unwrap();
+}
+
+#[test]
+fn the_sweep_keeps_an_image_history_linked_before_it_arrived() {
+    let db = open_memory_for_tests();
+    let note_id = make_markdown_note(&db);
+    db.with_conn(|c| {
+        crate::history::capture(
+            c,
+            &note_id,
+            "markdown",
+            "edited",
+            None,
+            "![](asset:mindstream/asset_late)",
+        )
+    })
+    .unwrap();
+    set_body(&db, &note_id, "image removed");
+    // Some other asset, so this sweep runs rather than finding nothing to free.
+    db.with_conn(|c| store_deduped(c, &note_id, "image/png", &[1]))
+        .unwrap();
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    // The image arrives by sync after that sweep, and its owner drops it.
+    let owner = make_markdown_note(&db);
+    db.with_conn(|c| {
+        upload_with_id(
+            c,
+            "asset_late".into(),
+            UploadAsset {
+                owning_note_id: owner.clone(),
+                mime_type: "image/png".into(),
+                bytes: vec![9],
+            },
+        )
+    })
+    .unwrap();
+    set_body(&db, &owner, "never linked it");
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    assert_eq!(removed, 0, "restoring the version still needs the image");
+}
+
+#[test]
+fn the_sweep_frees_an_upload_the_note_never_saved() {
+    let db = open_memory_for_tests();
+    let note_id = make_markdown_note(&db);
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    db.with_conn(|c| store_deduped(c, &note_id, "image/png", &[4, 5, 6]))
+        .unwrap();
+
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    assert_eq!(removed, 1);
 }
 
 #[test]
@@ -839,6 +976,54 @@ fn the_sweep_collects_assets_orphaned_by_a_folder_delete() {
     assert!(db.with_conn(|c| load(c, &asset_id)).is_err());
 }
 
+#[test]
+fn the_sweep_frees_an_image_whose_last_reference_went_with_a_folder() {
+    // The owner lives outside the folder and never changes, so only the
+    // dropped reference row can bring the image back to the sweep.
+    let db = open_memory_for_tests();
+    let owner = make_markdown_note(&db);
+    let folder = db
+        .with_conn(|c| {
+            crate::collections::create(
+                c,
+                crate::collections::CreateCollection {
+                    name: "Folder".into(),
+                    parent_collection_id: None,
+                },
+            )
+        })
+        .unwrap()
+        .id;
+    let asset_id = db
+        .with_conn(|c| store_deduped(c, &owner, "image/png", &[5, 5]))
+        .unwrap()
+        .id;
+    db.with_conn(|c| {
+        create_note(
+            c,
+            CreateNote {
+                title: Some("Uses it".into()),
+                body: Some(format!("![](asset:mindstream/{asset_id})")),
+                parent_collection_id: Some(folder.clone()),
+                note_kind: Some("markdown".into()),
+            },
+        )
+    })
+    .unwrap();
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    assert!(db.with_conn(|c| load(c, &asset_id)).is_ok());
+
+    db.with_conn(|c| crate::collections::delete(c, &folder))
+        .unwrap();
+
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    assert_eq!(removed, 1);
+    assert!(db.with_conn(|c| load(c, &asset_id)).is_err());
+}
+
 // ---------- migration 25 backfill ----------
 
 #[test]
@@ -1029,6 +1214,40 @@ fn the_sweep_keeps_an_image_only_the_crdt_still_shows() {
         .with_conn(|c| asset_reference_counts(c, &note_id))
         .unwrap();
     assert!(refs.contains_key(&asset_id));
+}
+
+#[test]
+fn the_sweep_keeps_an_image_a_note_shows_without_a_reference_row() {
+    // A pull can hand over a CRDT that links an image before the image
+    // itself arrives; that note then has no row for it. The sweep skips
+    // unchanged notes, so it must look for such notes before freeing.
+    let db = open_memory_for_tests();
+    let owner = make_markdown_note(&db);
+    let asset_id = pushed_asset(&db, &owner);
+    let state = crate::sync::yrs_doc::append_editor_block_for_tests(
+        &crate::sync::yrs_doc::editor_state_for_tests("old text"),
+        7,
+        "Happy birthday",
+        Some(&format!("asset:mindstream/{asset_id}")),
+    );
+    let note_id = note_with_stale_body(&db, &state);
+    db.with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+    db.with_conn(|c| {
+        c.execute(
+            "DELETE FROM asset_refs WHERE note_id = ?1",
+            params![note_id],
+        )?;
+        Ok::<(), AppError>(())
+    })
+    .unwrap();
+
+    let removed = db
+        .with_conn(sweep_unreferenced_markdown_assets_inner)
+        .unwrap();
+
+    assert_eq!(removed, 0, "the editor still draws this image");
+    assert!(db.with_conn(|c| load(c, &asset_id)).is_ok());
 }
 
 #[test]

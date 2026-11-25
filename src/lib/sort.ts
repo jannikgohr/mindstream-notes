@@ -11,6 +11,7 @@
 
 import type { Collection, NoteSummary, TreeNode } from './api';
 import { getSettingValue } from '$lib/settings/store.svelte';
+import { compareLabels } from '$lib/utils';
 
 export type SortStrategy = 'alphabetical' | 'modified' | 'created';
 export type SortDirection = 'asc' | 'desc';
@@ -43,9 +44,7 @@ function labelOf(node: TreeNode): string {
 
 /** A→Z. */
 function alphabetical(a: TreeNode, b: TreeNode): number {
-  return labelOf(a).localeCompare(labelOf(b), undefined, {
-    sensitivity: 'base'
-  });
+  return compareLabels(labelOf(a), labelOf(b));
 }
 
 function timestamp(

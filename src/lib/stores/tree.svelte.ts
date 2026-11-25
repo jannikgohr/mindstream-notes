@@ -20,6 +20,7 @@ import type {
 } from '$lib/api';
 import { TRASH_ID } from '$lib/api';
 import { composeTree } from '$lib/api/tree';
+import { compareLabels } from '$lib/utils';
 import { runSync } from '$lib/sync/runner';
 import { extractPdfText } from '$lib/pdf/extract-text';
 import { toErrorMessage } from '$lib/api/errors';
@@ -33,24 +34,19 @@ import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import { ancestorIsTrash } from '$lib/editor/trash';
 import { tUi } from '$lib/settings/i18n.svelte';
 
-interface TreeState {
-  tree: TreeNode[];
-  notesById: Record<string, NoteSummary>;
-  collectionsById: Record<string, Collection>;
-  loading: boolean;
-  error: string | null;
+class TreeState {
+  // Raw: replaced whole on every change, never patched in place. A deep
+  // proxy over every node made each pass over a large vault slow.
+  tree = $state.raw<TreeNode[]>([]);
+  notesById = $state<Record<string, NoteSummary>>({});
+  collectionsById = $state<Record<string, Collection>>({});
+  loading = $state(false);
+  error = $state<string | null>(null);
   /** Has loadTree() ever resolved? Used by Layout to gate the dock setup. */
-  ready: boolean;
+  ready = $state(false);
 }
 
-export const tree = $state<TreeState>({
-  tree: [],
-  notesById: {},
-  collectionsById: {},
-  loading: false,
-  error: null,
-  ready: false
-});
+export const tree = new TreeState();
 
 // Coalesces concurrent callers onto a single in-flight fetch. Startup fires
 // loadTree() from onMount and again from the dockview bootstrap; without this
@@ -80,6 +76,15 @@ export function loadTree(): Promise<void> {
   return inFlight;
 }
 
+/**
+ * Wait for the load already running, or start one. For callers that need the
+ * vault loaded rather than a snapshot newer than their own change: joining
+ * keeps a large vault from being read twice at startup.
+ */
+export function ensureTreeLoaded(): Promise<void> {
+  return inFlight ?? loadTree();
+}
+
 async function doLoadTree(): Promise<void> {
   tree.error = null;
   try {
@@ -100,7 +105,7 @@ async function doLoadTree(): Promise<void> {
 }
 
 // A write that arrives before anything has loaded the vault loads it here.
-registerVaultAccessProbe(loadTree);
+registerVaultAccessProbe(ensureTreeLoaded);
 
 // ---------- Notes ----------
 
@@ -309,14 +314,17 @@ export async function removeNoteTag(id: string, tag: string): Promise<void> {
  * created tags for re-use.
  */
 export function allTagsInUse(): string[] {
+  return [...tagsInUse()].sort(compareLabels);
+}
+
+/** The distinct tags on non-trashed notes, unsorted. */
+export function tagsInUse(): Set<string> {
   const set = new Set<string>();
   for (const n of Object.values(tree.notesById)) {
     if (n.trashed) continue;
     for (const t of n.tags) set.add(t);
   }
-  return [...set].sort((a, b) =>
-    a.localeCompare(b, undefined, { sensitivity: 'base' })
-  );
+  return set;
 }
 
 /**
@@ -491,7 +499,7 @@ export function applyNoteChange(change: NoteChange): void {
     modified: change.modified
   };
   if (change.title !== undefined)
-    patchNodeName(tree.tree, change.id, change.title);
+    tree.tree = renameNode(tree.tree, change.id, change.title);
 }
 
 /** Stamp `modified` after an editor saved a note, in every window. */
@@ -508,18 +516,26 @@ function broadcastNoteChange(change: NoteChange): void {
   );
 }
 
-// ---------- Internal: in-place tree patches for optimistic updates ----------
+// ---------- Internal: tree patches for optimistic updates ----------
 
-function patchNodeName(nodes: TreeNode[], id: string, name: string): void {
-  for (const n of nodes) {
-    if (n.kind === 'note' && n.id === id) {
-      n.name = name;
-      return;
+/** `nodes` with the note renamed, copying only the path to it. */
+function renameNode(nodes: TreeNode[], id: string, name: string): TreeNode[] {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    let next: TreeNode | null = null;
+    if (node.kind === 'note') {
+      if (node.id === id) next = { ...node, name };
+    } else {
+      const children = renameNode(node.children, id, name);
+      if (children !== node.children) next = { ...node, children };
     }
-    if (n.kind === 'folder') {
-      patchNodeName(n.children, id, name);
+    if (next) {
+      const copy = nodes.slice();
+      copy[i] = next;
+      return copy;
     }
   }
+  return nodes;
 }
 
 /** Apply the command result without fetching every note and tag in the vault. */
