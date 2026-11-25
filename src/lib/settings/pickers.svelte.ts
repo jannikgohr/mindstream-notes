@@ -8,7 +8,7 @@
  */
 
 import { tree } from '$lib/stores/tree.svelte';
-import { allTagsInUse } from '$lib/stores/tree.svelte';
+import { allTagsInUse, tagsInUse } from '$lib/stores/tree.svelte';
 import { TRASH_ID } from '$lib/api/index';
 import { ALL_SETTINGS, getSettingValue, setSettingValue } from './store.svelte';
 import { pluginSettingsSections } from '$lib/plugins/registry.svelte';
@@ -140,19 +140,21 @@ export function startPickerSettingPruning(): () => void {
   return $effect.root(() => {
     $effect(() => {
       if (!tree.ready || tree.error) return;
-      const folders = liveFolderIds();
-      const tags = new Set(allTagsInUse());
-      const notes = new Set(
-        Object.values(tree.notesById)
-          .filter((note) => !noteIsUnderTrash(note, tree.collectionsById))
-          .map((note) => note.id)
-      );
+      // Built only for a setting that holds a value: each walks the vault.
+      let folders: Set<string> | undefined;
+      let tags: Set<string> | undefined;
       for (const { id, kind } of pickerSettings()) {
         const value = getSettingValue(id);
         if (typeof value !== 'string' || value === '') continue;
-        const live =
-          kind === 'folder' ? folders : kind === 'tag' ? tags : notes;
-        const orphaned = !live.has(value);
+        let orphaned: boolean;
+        if (kind === 'folder') {
+          orphaned = !(folders ??= liveFolderIds()).has(value);
+        } else if (kind === 'tag') {
+          orphaned = !(tags ??= tagsInUse()).has(value);
+        } else {
+          const note = tree.notesById[value];
+          orphaned = !note || noteIsUnderTrash(note, tree.collectionsById);
+        }
         if (orphaned) void setSettingValue(id, '').catch(() => {});
       }
     });

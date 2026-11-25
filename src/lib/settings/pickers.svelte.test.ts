@@ -4,6 +4,7 @@ import { flushSync } from 'svelte';
 const {
   tree,
   allTagsInUse,
+  tagsInUse,
   ALL_SETTINGS,
   getSettingValue,
   setSettingValue,
@@ -27,13 +28,18 @@ const {
     >
   },
   allTagsInUse: vi.fn(() => [] as string[]),
+  tagsInUse: vi.fn(() => new Set<string>()),
   ALL_SETTINGS: [] as unknown[],
   getSettingValue: vi.fn(),
   setSettingValue: vi.fn(() => Promise.resolve()),
   pluginSettingsSections: vi.fn(() => [] as unknown[])
 }));
 
-vi.mock('$lib/stores/tree.svelte', () => ({ tree, allTagsInUse }));
+vi.mock('$lib/stores/tree.svelte', () => ({
+  tree,
+  allTagsInUse,
+  tagsInUse
+}));
 vi.mock('$lib/api/index', () => ({ TRASH_ID: 'trash' }));
 vi.mock('./store.svelte', () => ({
   ALL_SETTINGS,
@@ -73,6 +79,7 @@ beforeEach(() => {
     }
   };
   allTagsInUse.mockReturnValue(['alpha', 'beta']);
+  tagsInUse.mockReset().mockImplementation(() => new Set(allTagsInUse()));
   ALL_SETTINGS.length = 0;
   getSettingValue.mockReset();
   setSettingValue.mockReset().mockResolvedValue(undefined);
@@ -130,6 +137,8 @@ describe('startPickerSettingPruning', () => {
     const stop = startPickerSettingPruning();
     flushSync();
     expect(setSettingValue).toHaveBeenCalledWith('default-folder', '');
+    // No tag setting holds a value, so the vault's tags are never gathered.
+    expect(tagsInUse).not.toHaveBeenCalled();
     stop();
   });
 

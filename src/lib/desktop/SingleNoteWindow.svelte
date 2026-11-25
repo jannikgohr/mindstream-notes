@@ -21,7 +21,7 @@
   import { loadNote, requestNoteWindow, type NoteKind } from '$lib/api';
   import { pushToast } from '$lib/components/toast.svelte';
   import { installFileDropRouter } from '$lib/file-drop';
-  import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { ensureTreeLoaded, tree } from '$lib/stores/tree.svelte';
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -73,7 +73,7 @@
   onMount(() => {
     initWindowChrome();
     setActiveNote(noteId);
-    void loadTree();
+    void ensureTreeLoaded();
     let cancelled = false;
     void (async () => {
       try {

@@ -59,7 +59,7 @@
     toggleRightSidebar,
     rightSidebarShown
   } from '$lib/state.svelte';
-  import { loadTree, tree } from '$lib/stores/tree.svelte';
+  import { ensureTreeLoaded, loadTree, tree } from '$lib/stores/tree.svelte';
   import { prefersReducedMotion } from '$lib/reduce-motion.svelte';
   import { loadProfiles, profilesState } from '$lib/stores/profiles.svelte';
   import { tUi } from '$lib/settings/i18n.svelte';
@@ -404,7 +404,7 @@
     });
 
     await loadProfiles();
-    if (!tree.ready) await loadTree();
+    if (!tree.ready) await ensureTreeLoaded();
 
     const restored = tryRestoreLayout();
     layoutPersistenceReady = true;
@@ -909,7 +909,7 @@
     // early-return in the UI setup — e.g. a flaky `import('dockview')`
     // during a Vite dev rebuild — left the sidebar stuck on "Loading…"
     // forever. Data loading must not be hostage to UI bootstrap.
-    void loadTree();
+    void ensureTreeLoaded();
     // setupDockview awaits the same tree (idempotent if already loaded) before
     // restoring panels. Surface any rejection instead of letting `void` eat it.
     void tick()
@@ -1084,9 +1084,9 @@
   // otherwise a run before the first tab opened would track no title at all.
   $effect(() => {
     void openPanelCount;
-    for (const noteId of Object.keys(tree.notesById)) {
-      const panel = openPanels.get(noteId);
-      if (panel) panel.api.setTitle(tree.notesById[noteId].title);
+    for (const [noteId, panel] of openPanels) {
+      const note = tree.notesById[noteId];
+      if (note) panel.api.setTitle(note.title);
     }
   });
 
@@ -1138,9 +1138,8 @@
   // the tree after sync, so a peer's hard-delete propagates the same way).
   // A note that moves into the trash, by itself or with its folder, closes
   // its tab as well.
-  // We snapshot the live key set into a Set so the dependency is the
-  // explicit Object.keys read — mirrors the title-sync effect above and
-  // avoids relying on the `in` operator being tracked by $state's proxy.
+  // Only the open tabs' notes are read, so a vault of any size costs the
+  // same; the tab count dependency re-runs it as tabs open and close.
   // Collect first, then call removePanel — the onDidRemovePanel handler
   // mutates openPanels and we don't want to iterate it while it changes.
   $effect(() => {
@@ -1148,7 +1147,7 @@
     // short-circuit before this read on the first run (dock is set
     // asynchronously inside setupDockview), and Svelte 5 would record no
     // dependency, so the effect would never re-run.
-    const known = new Set(Object.keys(tree.notesById));
+    const notes = tree.notesById;
     const ready = tree.ready;
     void openPanelCount;
     if (!dock || !ready) return;
@@ -1157,11 +1156,12 @@
       if (!openPanels.has(noteId)) openedOutsideTrash.delete(noteId);
     }
     for (const [noteId, panel] of openPanels) {
-      if (!known.has(noteId)) {
+      const note = notes[noteId];
+      if (!note) {
         stale.push({ noteId, panel });
         continue;
       }
-      if (!noteIsUnderTrash(tree.notesById[noteId], tree.collectionsById)) {
+      if (!noteIsUnderTrash(note, tree.collectionsById)) {
         openedOutsideTrash.add(noteId);
       } else if (openedOutsideTrash.has(noteId)) {
         openedOutsideTrash.delete(noteId);
