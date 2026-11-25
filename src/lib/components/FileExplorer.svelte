@@ -956,7 +956,16 @@
   class="file-explorer flex h-full w-full flex-col bg-surface-0 text-xs"
   oncontextmenu={(e) => openMenu(e, { kind: 'root' })}
 >
-  <div class="px-3 pb-1 pt-2"><VaultSwitcher /></div>
+  <div
+    class="px-3 pb-1 pt-2"
+    role="presentation"
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }}
+  >
+    <VaultSwitcher />
+  </div>
   <!-- Fixed height: each view puts a different action here, or none, and
        the navigation below must not move when the view changes. -->
   <div class="flex h-12 shrink-0 items-center gap-1 px-3 pb-3 pt-1">

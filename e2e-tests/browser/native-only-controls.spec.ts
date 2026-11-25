@@ -106,6 +106,9 @@ test.describe('desktop shell', () => {
     for (const label of VAULT_MANAGEMENT_LABELS) {
       await expect(page.getByText(label, { exact: true })).toHaveCount(0);
     }
+
+    await switcher.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toHaveCount(0);
   });
 });
 
