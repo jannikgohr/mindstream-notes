@@ -60,6 +60,7 @@
   import {
     createCollectionIn,
     createNoteIn,
+    ensureTreeLoaded,
     importPdfIn,
     loadTree,
     tree
@@ -88,7 +89,7 @@
     const onboardingNote = takeOnboardingNote();
     if (onboardingNote) void loadTree().then(() => openNote(onboardingNote));
     if (!tree.ready) {
-      void loadTree().then(() => migrateLegacyFavourites());
+      void ensureTreeLoaded().then(() => migrateLegacyFavourites());
     } else {
       void migrateLegacyFavourites();
     }

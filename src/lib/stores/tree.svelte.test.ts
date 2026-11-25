@@ -71,6 +71,7 @@ import {
   createCollectionIn,
   createNoteIn,
   emptyTrash,
+  ensureTreeLoaded,
   importPdfIn,
   leaveSharedCollection,
   loadTree,
@@ -568,6 +569,21 @@ describe('reloads after an in-flight snapshot', () => {
     await Promise.all([first, mutation, joined]);
     expect(tree.notesById.n1.parent_collection_id).toBe('new-folder');
     expect(loadTreeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('joins a running load instead of reading the vault again', async () => {
+    let resolve!: (value: unknown) => void;
+    loadTreeMock.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        })
+    );
+    const first = loadTree();
+    const joined = ensureTreeLoaded();
+    resolve({ tree: [], notesById: {}, collectionsById: {} });
+    await Promise.all([first, joined]);
+    expect(loadTreeMock).toHaveBeenCalledTimes(1);
   });
 
   it('retries a failed older snapshot when a reload was requested', async () => {

@@ -130,9 +130,11 @@ impl BrowserDatabase {
         let response = vault_api::dispatch(conn, request);
         receipts::context(conn, None).map_err(error)?;
         let response = response.map_err(command_error)?;
-        response
-            .serialize(&serde_wasm_bindgen::Serializer::json_compatible())
-            .map_err(error)
+        // One string and JSON.parse: building the value field by field
+        // crosses into JS for every key and string, which took a large
+        // vault's tree listing hundreds of milliseconds.
+        let text = serde_json::to_string(&response).map_err(error)?;
+        js_sys::JSON::parse(&text).map_err(|_| error("Could not decode the storage response"))
     }
 
     pub fn receipt(&mut self, note_id: &str) -> Result<Option<String>, JsValue> {
