@@ -958,6 +958,53 @@ const MIGRATIONS: &[Migration] = &[
             DROP INDEX idx_notes_parent;
         "#,
     },
+    Migration {
+        to: 37,
+        // What the asset sweep must look at again: notes whose content or
+        // history changed or that gained a reference row (an upload the note
+        // may never save), and assets that lost one. Triggers
+        // catch every write path, sync included; `modified` can't, since a
+        // pull stores the sending device's time. The seed makes the first
+        // sweep after this upgrade a full one. No INSERT OR IGNORE: inside a
+        // trigger, the firing statement's conflict policy (an upsert's
+        // included) replaces it.
+        sql: r#"
+            CREATE TABLE asset_sweep_notes (note_id TEXT PRIMARY KEY) WITHOUT ROWID;
+            CREATE TABLE asset_sweep_assets (asset_id TEXT PRIMARY KEY) WITHOUT ROWID;
+            INSERT INTO asset_sweep_notes SELECT id FROM notes WHERE note_kind = 'markdown';
+
+            CREATE TRIGGER asset_sweep_note_insert AFTER INSERT ON notes
+                WHEN new.note_kind = 'markdown'
+            BEGIN
+                INSERT INTO asset_sweep_notes SELECT new.id
+                    WHERE NOT EXISTS (SELECT 1 FROM asset_sweep_notes WHERE note_id = new.id);
+            END;
+            CREATE TRIGGER asset_sweep_note_update
+                AFTER UPDATE OF body, yrs_state, note_kind ON notes
+                WHEN new.note_kind = 'markdown'
+            BEGIN
+                INSERT INTO asset_sweep_notes SELECT new.id
+                    WHERE NOT EXISTS (SELECT 1 FROM asset_sweep_notes WHERE note_id = new.id);
+            END;
+            CREATE TRIGGER asset_sweep_version_delete AFTER DELETE ON note_versions
+                WHEN old.note_kind = 'markdown'
+            BEGIN
+                INSERT INTO asset_sweep_notes SELECT old.note_id
+                    WHERE NOT EXISTS (SELECT 1 FROM asset_sweep_notes WHERE note_id = old.note_id);
+            END;
+            CREATE TRIGGER asset_sweep_ref_insert AFTER INSERT ON asset_refs
+                WHEN (SELECT note_kind FROM notes WHERE id = new.note_id) = 'markdown'
+            BEGIN
+                INSERT INTO asset_sweep_notes SELECT new.note_id
+                    WHERE NOT EXISTS (SELECT 1 FROM asset_sweep_notes WHERE note_id = new.note_id);
+            END;
+            CREATE TRIGGER asset_sweep_ref_delete AFTER DELETE ON asset_refs
+            BEGIN
+                INSERT INTO asset_sweep_assets SELECT old.asset_id
+                    WHERE NOT EXISTS (SELECT 1 FROM asset_sweep_assets WHERE asset_id = old.asset_id);
+            END;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {
