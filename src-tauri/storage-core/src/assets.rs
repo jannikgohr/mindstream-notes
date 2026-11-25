@@ -40,7 +40,7 @@
 //! collection and pushed to that scope's recipients, which crosses an E2EE
 //! boundary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use chrono::Utc;
@@ -685,14 +685,21 @@ pub fn asset_reference_counts(
 /// `body`, so reconciling it from text would drop every ref and free blobs the
 /// canvas is still drawing.
 pub fn purge_unreferenced_markdown_assets(conn: &Connection, note_id: &str) -> AppResult<usize> {
-    let candidates = rebuild_markdown_refs(conn, note_id)?;
-    delete_if_unreferenced(conn, candidates)
+    let rebuilt = rebuild_markdown_refs(conn, note_id)?;
+    delete_if_unreferenced(conn, rebuilt.released)
+}
+
+struct Rebuilt {
+    released: Vec<String>,
+    /// The note links an asset this device doesn't hold yet, so it has no row
+    /// for it until a rebuild after the asset arrives.
+    waits_for_asset: bool,
 }
 
 /// Rebuild one markdown note's `asset_refs` rows and return the assets that
 /// lost their claim from it: rows it referenced before but not now, and rows
 /// it created that it does not reference. A no-op for other kinds.
-fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<String>> {
+fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Rebuilt> {
     let note_kind: Option<NoteKind> = conn
         .query_row(
             "SELECT note_kind FROM notes WHERE id = ?1",
@@ -701,7 +708,10 @@ fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<Stri
         )
         .optional()?;
     if note_kind != Some(NoteKind::Markdown) {
-        return Ok(Vec::new());
+        return Ok(Rebuilt {
+            released: Vec::new(),
+            waits_for_asset: false,
+        });
     }
 
     // Assets this note referenced before the rebuild. Anything that drops off
@@ -718,6 +728,7 @@ fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<Stri
         "DELETE FROM asset_refs WHERE note_id = ?1",
         params![note_id],
     )?;
+    let mut waits_for_asset = false;
     for asset_id in refs.keys() {
         // INSERT OR IGNORE tolerates ids that point at assets which no longer
         // exist (a body pasted in from another vault); the FK would otherwise
@@ -732,6 +743,8 @@ fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<Stri
             .unwrap_or(false);
         if exists {
             add_ref(conn, asset_id, note_id)?;
+        } else {
+            waits_for_asset = true;
         }
     }
 
@@ -751,7 +764,10 @@ fn rebuild_markdown_refs(conn: &Connection, note_id: &str) -> AppResult<Vec<Stri
             }
         }
     }
-    Ok(candidates)
+    Ok(Rebuilt {
+        released: candidates,
+        waits_for_asset,
+    })
 }
 
 /// Delete each candidate that no `asset_refs` row claims any more.
@@ -774,46 +790,196 @@ fn delete_if_unreferenced(conn: &Connection, candidates: Vec<String>) -> AppResu
     Ok(removed)
 }
 
-/// Reconcile every markdown note's references, then free whatever nothing
-/// points at any more. Runs from the history-retention pass.
+/// Reconcile the references of markdown notes changed since the last sweep,
+/// then free whatever nothing points at any more. Runs from the
+/// history-retention pass. Migration 37's triggers fill the queue it reads.
 pub fn sweep_unreferenced_markdown_assets_inner(conn: &Connection) -> AppResult<usize> {
-    let note_ids = {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM notes
-             WHERE note_kind = 'markdown'",
-        )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-
-    // Two phases: every note's refs first, deletions after. Deleting per note
-    // would let an early note free an asset a later note still claims, before
-    // that later note's rows were rebuilt (a reference only its CRDT holds has
-    // no row until then).
-    let mut candidates = Vec::new();
-    for note_id in note_ids {
-        candidates.extend(rebuild_markdown_refs(conn, &note_id)?);
-    }
-    candidates.sort();
-    candidates.dedup();
-    let mut removed = delete_if_unreferenced(conn, candidates)?;
-
-    // Assets orphaned by a path that never ran release_note_assets — notably
-    // a folder delete, where SQLite cascades the notes away and the FK just
-    // nulls `owning_note_id`. Nothing references these and no note-keyed pass
-    // above would ever look at them.
-    let orphans: Vec<String> = {
-        let mut stmt = conn.prepare(
-            "SELECT a.id FROM assets a
-             WHERE a.owning_note_id IS NULL
-               AND NOT EXISTS (SELECT 1 FROM asset_refs r WHERE r.asset_id = a.id)",
-        )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    for asset_id in orphans {
-        removed += delete_asset(conn, &asset_id)?;
-    }
-
+    // One commit for the whole pass: each one is slow on the browser's OPFS.
+    let tx = conn.unchecked_transaction()?;
+    let removed = sweep_queued(&tx)?;
+    tx.commit()?;
     Ok(removed)
+}
+
+fn sweep_queued(conn: &Connection) -> AppResult<usize> {
+    let has_assets: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM assets)", [], |r| r.get(0))?;
+    // Nothing to free. The queue stays: a queued note may link an asset that
+    // has yet to arrive, and its row is only written by a later rebuild.
+    if !has_assets {
+        return Ok(0);
+    }
+
+    // Two phases: every queued note's refs first, deletions after. Deleting
+    // per note would let an early note free an asset a later note still
+    // claims, before that later note's rows were rebuilt (a reference only its
+    // CRDT holds has no row until then).
+    let mut sweep = Sweep::default();
+    let mut candidates = Vec::new();
+    for note_id in query_ids(conn, "SELECT note_id FROM asset_sweep_notes")? {
+        candidates.extend(sweep.rebuild(conn, note_id)?);
+    }
+    candidates.extend(query_ids(conn, "SELECT asset_id FROM asset_sweep_assets")?);
+    // Assets orphaned by a path that never ran release_note_assets, notably
+    // a folder delete, where SQLite cascades the notes away and the FK just
+    // nulls `owning_note_id`.
+    candidates.extend(query_ids(
+        conn,
+        "SELECT a.id FROM assets a
+         WHERE a.owning_note_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM asset_refs r WHERE r.asset_id = a.id)",
+    )?);
+    let removed = sweep.delete_unclaimed(conn, candidates)?;
+
+    clear_sweep_queue(conn)?;
+    for note_id in &sweep.waiting {
+        conn.execute(
+            "INSERT INTO asset_sweep_notes (note_id) VALUES (?1)",
+            params![note_id],
+        )?;
+    }
+    Ok(removed)
+}
+
+#[derive(Default)]
+struct Sweep {
+    rebuilt: HashSet<String>,
+    /// Notes to revisit next sweep, when the assets they link may be here.
+    waiting: Vec<String>,
+}
+
+impl Sweep {
+    fn rebuild(&mut self, conn: &Connection, note_id: String) -> AppResult<Vec<String>> {
+        let rebuilt = rebuild_markdown_refs(conn, &note_id)?;
+        if rebuilt.waits_for_asset {
+            self.waiting.push(note_id.clone());
+        }
+        self.rebuilt.insert(note_id);
+        Ok(rebuilt.released)
+    }
+
+    /// Delete each candidate that nothing claims. Unqueued notes were not
+    /// rebuilt, and one can show an asset without a row for it. So before
+    /// freeing, every other markdown note that links an unclaimed id is
+    /// rebuilt, one pass over the vault per round, and the check repeats.
+    fn delete_unclaimed(&mut self, conn: &Connection, candidates: Vec<String>) -> AppResult<usize> {
+        let mut removed = 0usize;
+        let mut candidates: HashSet<String> = candidates.into_iter().collect();
+        while !candidates.is_empty() {
+            let mut unclaimed = HashSet::new();
+            for asset_id in candidates.drain() {
+                if asset_exists(conn, &asset_id)? && !is_referenced(conn, &asset_id)? {
+                    unclaimed.insert(asset_id);
+                }
+            }
+            if unclaimed.is_empty() {
+                break;
+            }
+            for note_id in self.unrebuilt_notes_linking(conn, &unclaimed)? {
+                candidates.extend(self.rebuild(conn, note_id)?);
+            }
+            for asset_id in unclaimed {
+                if !is_referenced(conn, &asset_id)? {
+                    removed += delete_asset(conn, &asset_id)?;
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    fn unrebuilt_notes_linking(
+        &self,
+        conn: &Connection,
+        ids: &HashSet<String>,
+    ) -> AppResult<Vec<String>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, body, yrs_state FROM notes
+             WHERE note_kind = 'markdown'
+               AND (instr(body, 'asset:mindstream/') > 0
+                    OR instr(yrs_state, CAST('asset:mindstream/' AS BLOB)) > 0)",
+        )?;
+        let longest = ids.iter().map(String::len).max().unwrap_or(0);
+        let mut rows = stmt.query([])?;
+        let mut notes = Vec::new();
+        while let Some(row) = rows.next()? {
+            let note_id: String = row.get(0)?;
+            if self.rebuilt.contains(&note_id) {
+                continue;
+            }
+            let body: String = row.get(1)?;
+            let state: Option<Vec<u8>> = row.get(2)?;
+            if links_any(body.as_bytes(), ids, longest)
+                || state.is_some_and(|s| links_any(&s, ids, longest))
+            {
+                notes.push(note_id);
+            }
+        }
+        Ok(notes)
+    }
+}
+
+/// Whether `bytes` hold an asset link to one of `ids`. Works on a Yjs state
+/// too, for the reason `mentions_asset_url` gives.
+fn links_any(bytes: &[u8], ids: &HashSet<String>, longest_id: usize) -> bool {
+    const NEEDLE: &[u8] = b"asset:mindstream/";
+    let mut rest = bytes;
+    while let Some(at) = rest.windows(NEEDLE.len()).position(|w| w == NEEDLE) {
+        rest = &rest[at + NEEDLE.len()..];
+        let len = rest
+            .iter()
+            .take(longest_id)
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_' || **b == b'-')
+            .count();
+        // Any prefix: in a Yjs state the byte after the URL can extend the run.
+        // A false match only costs a rebuild.
+        if (1..=len).any(|end| std::str::from_utf8(&rest[..end]).is_ok_and(|id| ids.contains(id))) {
+            return true;
+        }
+    }
+    false
+}
+
+fn asset_exists(conn: &Connection, asset_id: &str) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM assets WHERE id = ?1)",
+        params![asset_id],
+        |r| r.get(0),
+    )?)
+}
+
+fn is_referenced(conn: &Connection, asset_id: &str) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM asset_refs WHERE asset_id = ?1)",
+        params![asset_id],
+        |r| r.get(0),
+    )?)
+}
+
+fn query_ids(conn: &Connection, sql: &str) -> AppResult<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn clear_sweep_queue(conn: &Connection) -> AppResult<()> {
+    // The WHERE clauses keep an empty queue from writing anything: a bare
+    // DELETE rewrites the table even when it holds no rows.
+    conn.execute_batch(
+        "DELETE FROM asset_sweep_notes WHERE note_id IS NOT NULL;
+         DELETE FROM asset_sweep_assets WHERE asset_id IS NOT NULL;",
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_link_is_found_when_a_yjs_byte_after_it_reads_as_an_id_character() {
+        // A Yjs state stores the URL length-prefixed; the next byte can be
+        // anything, such as a block count of 48, which is ASCII '0'.
+        let ids = HashSet::from(["asset_x".to_string()]);
+        assert!(links_any(b"\x15asset:mindstream/asset_x0\x01", &ids, 7));
+    }
 }
