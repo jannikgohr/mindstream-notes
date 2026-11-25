@@ -944,6 +944,20 @@ const MIGRATIONS: &[Migration] = &[
             END;
         "#,
     },
+    Migration {
+        to: 36,
+        // Every column a note summary reads, in listing order. Without it,
+        // listing the tree walks each note's body and CRDT state to reach
+        // the columns stored after them, so opening a large vault read the
+        // whole notes table. It replaces idx_notes_parent, its prefix.
+        sql: r#"
+            CREATE INDEX idx_notes_summary ON notes(
+                parent_collection_id, position, title, id, created, modified,
+                trashed_at, favourite, etebase_uid, note_kind
+            );
+            DROP INDEX idx_notes_parent;
+        "#,
+    },
 ];
 
 pub fn run(conn: &mut Connection) -> AppResult<()> {

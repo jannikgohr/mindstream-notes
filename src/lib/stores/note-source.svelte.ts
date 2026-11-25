@@ -303,8 +303,9 @@ function personalTree(
   const out: TreeNode[] = [];
   for (const node of nodes) {
     if (node.kind === 'note') {
+      // The walk never enters the trash folder, so no ancestor is trashed.
       const note = notesById[node.id];
-      if (note && !noteIsUnderTrash(note, collectionsById)) out.push(node);
+      if (note && !note.trashed) out.push(node);
       continue;
     }
 

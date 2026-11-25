@@ -273,17 +273,19 @@ fn load_all_tags(conn: &Connection) -> AppResult<HashMap<String, Vec<String>>> {
     Ok(out)
 }
 
+const LIST_ALL_SQL: &str = "SELECT id, parent_collection_id, title, position, created, modified,
+        trashed_at, favourite, etebase_uid, note_kind
+ FROM notes
+ ORDER BY parent_collection_id, position, title";
+
 pub fn list(conn: &Connection, include_trashed: bool) -> AppResult<Vec<NoteSummary>> {
     let sql = if include_trashed {
-        "SELECT id, parent_collection_id, title, position, created, modified,
-                trashed_at, favourite, etebase_uid, note_kind
-         FROM notes
-         ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
+        LIST_ALL_SQL
     } else {
         "SELECT id, parent_collection_id, title, position, created, modified,
                 trashed_at, favourite, etebase_uid, note_kind
          FROM active_notes
-         ORDER BY parent_collection_id IS NOT NULL, parent_collection_id, position, title"
+         ORDER BY parent_collection_id, position, title"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], row_to_summary)?;
@@ -703,4 +705,28 @@ pub fn next_position(conn: &Connection, parent: Option<&str>) -> AppResult<i64> 
         .flatten()
     };
     Ok(max.unwrap_or(-1) + 1)
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    fn plan(conn: &Connection, sql: &str) -> String {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let rows = stmt.query_map([], |row| row.get::<_, String>(3)).unwrap();
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join("\n")
+    }
+
+    /// The tree's listing. A summary column missing from idx_notes_summary
+    /// sends it back through every note body, which made large vaults slow
+    /// to open.
+    #[test]
+    fn summaries_are_listed_from_the_covering_index() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::migrations::run(&mut conn).unwrap();
+        let plan = plan(&conn, LIST_ALL_SQL);
+        assert_eq!(plan, "SCAN notes USING COVERING INDEX idx_notes_summary");
+    }
 }
