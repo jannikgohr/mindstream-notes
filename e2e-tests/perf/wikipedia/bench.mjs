@@ -43,7 +43,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
@@ -153,6 +153,7 @@ const results = {
 };
 const save = () =>
   values.json && writeFile(values.json, JSON.stringify(results, null, 2));
+if (values.json) await mkdir(dirname(values.json), { recursive: true });
 
 // Times every storage request, and the graph layout worker's last update:
 // it stops posting once its layout has settled.
@@ -220,13 +221,18 @@ async function start() {
     { port: CDP_PORT, cdpClose: true }
   );
   const { page } = app;
-  await page.setViewportSize({ width: 1600, height: 1000 });
   page.on('pageerror', (error) => console.error('page error:', error.message));
   page.on('console', (message) => {
     if (message.text().startsWith('[bench]')) console.error(message.text());
   });
-  await page.context().addInitScript(instrument);
-  await page.goto(server.url);
+  try {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.context().addInitScript(instrument);
+    await page.goto(server.url);
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
   return app;
 }
 
@@ -244,11 +250,16 @@ try {
     .waitFor({ timeout: 120_000 });
 
   // `done` runs in the page and is polled like the competitor benches poll.
-  const time = async (name, begin, done, timeout = STEP) => {
+  const time = async (
+    name,
+    begin,
+    done,
+    { arg = null, timeout = STEP } = {}
+  ) => {
     const t0 = performance.now();
     await begin();
     try {
-      results[name] = await until(page, done, null, { t0, timeout });
+      results[name] = await until(page, done, arg, { t0, timeout });
     } catch (error) {
       await diagnose(page, name);
       throw error;
@@ -278,7 +289,7 @@ try {
       [...document.querySelectorAll('[role="alertdialog"]')].some((d) =>
         d.textContent.includes('Import finished')
       ),
-    LONG
+    { timeout: LONG }
   );
   results.importReport = (await dialog.innerText()).replace(/\s+/g, ' ').trim();
   await page.keyboard.press('Escape');
@@ -315,14 +326,24 @@ try {
     () => search.fill(query),
     () => !!document.querySelector('[role="dialog"] li button')
   );
-  // Any editor on screen: the vault's first note may be open behind it.
+  // Done when a visible editor shows text it didn't before the click: the
+  // vault's first note may be open behind the search.
+  const editors = () =>
+    [...document.querySelectorAll('.ProseMirror')]
+      .filter((e) => e.checkVisibility())
+      .map((e) => e.textContent ?? '');
+  const before = await page.evaluate(editors);
   await time(
     'openNote',
     () => hit.click(),
-    () =>
+    (before) =>
       [...document.querySelectorAll('.ProseMirror')].some(
-        (e) => e.checkVisibility() && (e.textContent?.length ?? 0) > 100
-      )
+        (e) =>
+          e.checkVisibility() &&
+          (e.textContent?.length ?? 0) > 0 &&
+          !before.includes(e.textContent)
+      ),
+    { arg: before }
   );
 
   // The local graph builds the link index on first use.
@@ -344,7 +365,12 @@ try {
   // The whole vault in a tab, with the sidebar back on the file tree so only
   // one graph runs.
   const tabGraph = page.locator('.dv-groupview [data-graph-state="ready"]');
-  const opened = await page.evaluate(() => performance.now());
+  // Only the tab's layout counts, not the local graph's.
+  const opened = await page.evaluate(() => {
+    window.__bench.layoutMessages = 0;
+    return performance.now();
+  });
+  const settleBy = performance.now() + Number(values.settle) * 1000;
   await time(
     'graphTab',
     () => sidebar.getByRole('button', { name: 'Open graph view' }).click(),
@@ -381,7 +407,7 @@ try {
       window.__bench.layoutMessages > 0 &&
       performance.now() - window.__bench.layoutAt > 1000,
     null,
-    { timeout: Number(values.settle) * 1000 }
+    { timeout: Math.max(0, settleBy - performance.now()) }
   )
     .then(() => page.evaluate(() => window.__bench.layoutAt))
     .catch(() => null);
