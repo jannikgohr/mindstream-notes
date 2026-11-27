@@ -51,8 +51,8 @@ worked around on the client.
   and a JSON header. Together they add roughly 400 bytes, counted from the
   header format and not measured. Peers check the signature against writer
   keys stored as items in the shared folder's assets collection. Those keys
-  are bound to usernames the writer declares, which is finding M4 in
-  [security-review.md](security-review.md).
+  are bound to usernames the writer declares, which was finding M4 of the
+  September 2026 audit.
 - **Read-only members** are kept out of live rooms entirely, by
   `can_receive_live_collab_room`.
 - **Revocation** rotates a salt in the share manifest and waits for every
@@ -96,8 +96,8 @@ Measured on the local test stack with `pnpm bench:backend --scale full`. See
 ### Sharing a folder takes four invitations
 
 A shared folder is four collections: a manifest plus folders, notes and assets.
-The recipient accepts four invitations in sequence with no transaction, as
-[bundles.rs](../../src-tauri/src/sharing/bundles.rs) notes, so partial states
+The recipient accepts four invitations in sequence with no transaction, as the
+removed `src-tauri/src/sharing/bundles.rs` noted, so partial states
 exist and need handling. The recipient cannot see the folder's name before accepting.
 Invitations are found by scanning, not pushed. Changing a member's access or
 removing them loops over the collections one request at a time.
@@ -858,9 +858,9 @@ This section is a reading of the licences, not legal advice.
 
 Closed by this design:
 
-- M4 and M5 in [security-review.md](security-review.md). The writer-key
-  registry and the share manifest no longer exist.
-- L4. The Etebase image is no longer used.
+- M4 and M5 of the September 2026 audit. The writer-key registry and the
+  share manifest no longer exist.
+- L4, an Etebase image pinned by tag. The Etebase image is no longer used.
 
 Newly owned:
 
@@ -908,7 +908,7 @@ Accepted:
   consulted.
 - **In process.** The server starts inside `cargo test` on a free port, so sync
   and permission tests need a Postgres and nothing else. That covers the two
-  tests the [security review](security-review.md) once listed as missing: a
+  tests the September 2026 audit listed as missing: a
   read-only member cannot write, and a removed member loses access.
 - **Benchmark.** `pnpm bench:backend`, in
   [e2e-tests/perf/backend-bench](../../e2e-tests/perf/backend-bench/run.mjs). It

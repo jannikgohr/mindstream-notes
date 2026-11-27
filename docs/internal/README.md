@@ -1,7 +1,7 @@
 # Internal documentation
 
 Notes for people working on Mindstream Notes: how the code fits together, the
-design behind it, plans, test procedures, validation records and audits. They
+design behind it, test procedures, validation records and security notes. They
 describe the code and its history, not how to use the app. The user guides are
 in the [documentation index](../README.md).
 
@@ -36,7 +36,6 @@ in the [documentation index](../README.md).
 
 - [Browser support](browser-support.md): the worker SQLite proof, shared Rust
   storage, verification commands, and remaining porting work
-
 - [Sync server design](server-design.md): what the server is and why it
   replaced the earlier stack
 - [Storage ownership and recovery](storage-ownership-and-recovery.md): settings
@@ -48,11 +47,10 @@ in the [documentation index](../README.md).
 - [Plugin host API design](plugin-host-api-design.md): which capabilities
   belong in the host, the decided note events, jobs and ink APIs, proposals
   for other capabilities, and why batching is shaped the way it is
-- [Shared ink and PDF documents](ink-pdf-unification-plan.md): how handwriting
-  and PDFs share one document model
-- [Vault runtime spike](vault-runtime-spike.md) and
-  [vault browser storage audit](vault-browser-storage-audit.md): the evidence
-  behind the multi-vault runtime
+- [Handwritten notes and PDFs](ink-and-pdf.md): the shared page model,
+  PDF backgrounds, search text and what was left out
+- [Vault runtime spike](vault-runtime-spike.md): the browser isolation evidence
+  and the macOS 14 decision behind the multi-vault runtime
 
 ## Testing
 
@@ -67,19 +65,13 @@ in the [documentation index](../README.md).
 - [Test backend](e2e/backend-stack.md): the disposable server the collaboration
   suites run against
 - [Ubuntu VM QA](e2e/ubuntu-vm-qa.md): manual checks on a Linux VM
-- [Android plugin validation](android-plugin-validation.md): checks for the
+- [Android plugin validation](android-plugin-validation.md): how to check the
   plugin host on a physical Android device, with the dated records of the
   [validation run](benchmarks/android-plugin-validation-2026-10-24.md), its
   [latency breakdown](benchmarks/android-plugin-profile-2026-10-24.md) and the
   [export save fix](benchmarks/android-export-fix-2026-10-25.md)
 
-## Security and audits
+## Security
 
-- [Security review](security-review.md): what the audit accepted, and the
-  trust boundaries
-- [Sync server pen test, October 2026](pen-test-2026-10.md): verified server
-  findings, fixes and what is still open
-- [September 2026 audit](audit-2026-09.md), with the fix records for
-  [data](audit-data-fixes.md), [editors](audit-editor-fixes.md),
-  [quality gates](audit-quality-fixes.md) and
-  [security](audit-security-fixes.md)
+- [Security review](security-review.md): the trust boundaries and the risks we
+  accepted instead of fixing

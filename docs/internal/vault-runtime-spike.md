@@ -1,8 +1,9 @@
 # Vault runtime spike
 
-Status on 2026-10-10: Windows browser isolation and native popout checks pass.
-The macOS lifecycle, Linux WebKit, and `tauri dev` host checks are pending.
-The owner accepted proceeding with macOS risk on 2026-10-10; macOS results remain unverified.
+The spike behind the multi-vault runtime, which is now built. It is kept for
+the macOS 14 decision and to rerun the browser isolation probe. What is still
+unchecked is tracked in the
+[platform checks](storage-ownership-and-recovery.md#concurrent-vault-platform-checks).
 
 ## Reproduce the browser checks
 
@@ -71,26 +72,7 @@ according to the [Tauri WebView API](https://docs.rs/tauri/2.11.1/tauri/webview/
 `data_directory` is unavailable for WKWebView. Incognito stores discard persisted
 browser state and cannot replace persistent vault stores.
 
-No macOS machine is available in this session. The owner will check a new
-packaged release and accepts macOS breaking changes because there are currently
-no real macOS users. Implementation may proceed. Dock/menu/Reopen behavior is
-an explicit release test obligation, not verified evidence. The direct executable
-probe cannot prove signed `.app` behavior.
-
-## Remaining gate checks
-
-- Package a disposable coordinator/worker prototype on macOS. Check Dock icons,
-  activation policy, app menus, Cmd + Q, Dock Reopen, hide/show, focus, and worker
-  crashes. Verify signing and shutdown/update behavior.
-- Run separate-directory and popout checks on Linux WebKitGTK. Do not treat a
-  shared-store run that happens to launch as evidence of supported concurrency.
-- Probe `tauri dev` with the long-lived process as its supervised child. Exit
-  and replace workers; prove that Vite and sibling workers survive.
-- Verify Windows foreground grants and Wayland activation tokens with real
-  launch requests. A button focusing its own process does not cover that path.
-- Measure renderer ownership/counts and memory with real vaults and popouts.
-- Implement and test the [browser-storage migration](vault-browser-storage-audit.md)
-  before new workers use isolated stores.
-
-Track the remaining checks in the [platform checks](storage-ownership-and-recovery.md#concurrent-vault-platform-checks).
-The macOS support decision is recorded; the deferred lifecycle test still needs results.
+The spike never ran on macOS. Breaking changes there were accepted because
+there were no real macOS users, so Dock, menu and Reopen behaviour remain a
+release check on a packaged, signed `.app`, which the direct executable probe
+cannot stand in for.
