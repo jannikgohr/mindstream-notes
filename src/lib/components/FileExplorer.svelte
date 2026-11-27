@@ -99,6 +99,7 @@
     nodeKey,
     selectedItemsFromKeys,
     selectionKeyForItem,
+    treeDropEffect,
     updateSelectionForClick,
     visibleSelectionKeys,
     type Draft,
@@ -259,6 +260,7 @@
   let emptyTrashAnimation = $state(0);
   let emptyTrashParticleCount = $state(0);
   let explorerRoot = $state<HTMLElement | null>(null);
+  let treeEl = $state<HTMLElement | null>(null);
   let selectedKeys = $state<SelectionKey[]>([]);
   let selectionAnchor = $state<SelectionKey | null>(null);
   let activeKey = $state<SelectionKey | null>(null);
@@ -769,25 +771,51 @@
   function onDragEnd() {
     drag = null;
     dragOver = null;
+    springOpen(null);
   }
   function draggedItems(): TreeItemRef[] {
     if (!drag) return [];
     return drag.items ?? [{ kind: drag.kind, id: drag.id }];
   }
-  function canDropOnFolder(targetFolderId: string | null): boolean {
-    if (source === 'shared') {
-      if (!drag) return false;
-      return sharedMoveIsLegal(
-        draggedItems(),
-        targetFolderId,
-        tree.notesById,
-        tree.collectionsById
+
+  // A collapsed folder hovered mid-drag opens, so the drop can reach the
+  // folders inside it.
+  const SPRING_OPEN_MS = 500;
+  let springFolderId: string | null = null;
+  let springTimer: ReturnType<typeof setTimeout> | undefined;
+  function springOpen(folderId: string | null) {
+    if (folderId === springFolderId) return;
+    clearTimeout(springTimer);
+    springFolderId = folderId;
+    if (folderId) {
+      springTimer = setTimeout(
+        () => (expanded[folderId] = true),
+        SPRING_OPEN_MS
       );
     }
-    if (!canReorganize) return false;
-    if (!drag) return true;
-    return !draggedItems().some(
-      (item) => item.kind === 'folder' && targetFolderId === item.id
+  }
+
+  /** Home takes any tree drag; Shared only its own, to explain a refusal. */
+  function acceptsTreeDrag(): boolean {
+    return canReorganize || (source === 'shared' && drag !== null);
+  }
+  function canDropOn(targetFolderId: string | null): boolean {
+    // A drag from another window carries no readable payload until the drop.
+    if (!drag) return canReorganize;
+    const items = draggedItems();
+    const effect = treeDropEffect(
+      items,
+      targetFolderId,
+      tree.notesById,
+      tree.collectionsById
+    );
+    if (effect !== 'move') return false;
+    if (source !== 'shared') return canReorganize;
+    return sharedMoveIsLegal(
+      items,
+      targetFolderId,
+      tree.notesById,
+      tree.collectionsById
     );
   }
   // Files dragged in from the OS. The tree only declares itself a drop zone
@@ -807,76 +835,74 @@
     e.preventDefault();
     e.stopPropagation();
     dragOver = null;
+    springOpen(null);
     const pdfs = droppedPdfFiles(e);
     if (pdfs.length === 0 || !canStartDraft(parentId)) return;
     if (parentId) expanded[parentId] = true;
     void importDroppedPdfs(pdfs, parentId, onOpenNote);
   }
-  /** A file dropped on a note lands next to it. */
+  /** A drop on a note lands next to it. */
   function noteParentId(noteId: string): string | null {
     return tree.notesById[noteId]?.parent_collection_id ?? null;
   }
 
-  function onDragOverFolder(e: DragEvent, folderId: string) {
+  /**
+   * Every row resolves its drag to a folder (null: the root) and stops it
+   * there, so the root never lights up for a drag over a row. Only a drop
+   * that would move something highlights its target.
+   */
+  function onTreeDragOver(
+    e: DragEvent,
+    targetFolderId: string | null,
+    springFolder: string | null = null
+  ) {
     if (!e.dataTransfer) return;
-    if (isFileDrag(e)) return onFileDragOver(e, folderId);
-    // In the Shared view we still accept the dragover for our own tree drags so
-    // the drop handler can run and explain a blocked move, but the cursor
-    // reflects legality (no-drop when illegal) and only legal targets highlight.
-    if (source === 'shared') {
-      if (!drag) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const legal = canDropOnFolder(folderId);
-      e.dataTransfer.dropEffect = legal ? 'move' : 'none';
-      dragOver = legal ? `f:${folderId}` : null;
-      return;
+    if (isFileDrag(e)) {
+      springOpen(springFolder);
+      return onFileDragOver(e, targetFolderId);
     }
-    if (!canDropOnFolder(folderId)) return;
+    if (!acceptsTreeDrag()) return;
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    dragOver = `f:${folderId}`;
+    springOpen(springFolder);
+    const legal = canDropOn(targetFolderId);
+    e.dataTransfer.dropEffect = legal ? 'move' : 'none';
+    dragOver = !legal ? null : targetFolderId ? `f:${targetFolderId}` : 'root';
   }
-  function onDragOverRoot(e: DragEvent) {
-    if (isFileDrag(e)) return onFileDragOver(e, null);
-    if (!canReorganize) return;
-    if (!e.dataTransfer) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    dragOver = 'root';
-  }
-  function onDragOverNote(e: DragEvent, noteId: string) {
-    if (isFileDrag(e)) return onFileDragOver(e, noteParentId(noteId));
-    if (!canReorganize) return;
-    if (!e.dataTransfer) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    dragOver = `n:${noteId}`;
+  function onDragOverFolder(e: DragEvent, node: TreeNode) {
+    const into =
+      drag &&
+      treeDropEffect(
+        draggedItems(),
+        node.id,
+        tree.notesById,
+        tree.collectionsById
+      );
+    const springs =
+      node.kind === 'folder' &&
+      node.children.length > 0 &&
+      into !== 'into-itself';
+    onTreeDragOver(e, node.id, springs ? node.id : null);
   }
   function onDragLeave() {
     dragOver = null;
   }
-  function readPayload(e: DragEvent): Drag {
-    return dragPayloadFromTransfer(e.dataTransfer);
-  }
-  function payloadItems(payload: Drag): TreeItemRef[] {
-    if (!payload) return [];
-    return payload.items ?? [{ kind: payload.kind, id: payload.id }];
-  }
-  // Note rows have no drop handler for tree drags (those bubble to the root).
-  function onDropOnNote(e: DragEvent, noteId: string) {
-    if (isFileDrag(e)) onFileDrop(e, noteParentId(noteId));
-  }
-  async function onDropOnFolder(e: DragEvent, targetFolderId: string) {
+  async function onTreeDrop(e: DragEvent, targetFolderId: string | null) {
     if (isFileDrag(e)) return onFileDrop(e, targetFolderId);
+    if (!acceptsTreeDrag()) return;
     e.preventDefault();
     e.stopPropagation();
-    const payload = readPayload(e);
-    dragOver = null;
-    drag = null;
+    const payload = dragPayloadFromTransfer(e.dataTransfer);
+    onDragEnd();
     if (!payload) return;
-    const items = payloadItems(payload);
+    const items = payload.items ?? [{ kind: payload.kind, id: payload.id }];
+    const effect = treeDropEffect(
+      items,
+      targetFolderId,
+      tree.notesById,
+      tree.collectionsById
+    );
+    if (effect === 'unchanged') return;
     // Shared view: reject anything that isn't an intra-scope move into an
     // editable folder, and tell the user why instead of silently no-oping.
     if (
@@ -891,17 +917,8 @@
       pushToast(tUi('fileTree.move.blockedShared'), { variant: 'error' });
       return;
     }
+    if (effect === 'into-itself') return;
     await moveManyTo(items, targetFolderId).catch(toastRefusal);
-  }
-  async function onDropOnRoot(e: DragEvent) {
-    if (isFileDrag(e)) return onFileDrop(e, null);
-    if (!canReorganize) return;
-    e.preventDefault();
-    const payload = readPayload(e);
-    dragOver = null;
-    drag = null;
-    if (!payload) return;
-    await moveManyTo(payloadItems(payload), null);
   }
 
   function toggleFolder(id: string) {
@@ -934,17 +951,27 @@
     const onWindowFileDrop = (event: DragEvent) => {
       if (isFileDrag(event)) dragOver = null;
     };
+    // Rows hand the spring timer between them, but nothing in the tree sees
+    // the pointer leave it.
+    const onWindowDragOver = (event: DragEvent) => {
+      if (event.target instanceof Node && treeEl?.contains(event.target))
+        return;
+      springOpen(null);
+    };
     document.addEventListener('pointerdown', onDocumentPointerDown, {
       capture: true
     });
     document.addEventListener('keydown', onDocumentKeyDown);
     window.addEventListener('drop', onWindowFileDrop, true);
+    window.addEventListener('dragover', onWindowDragOver, true);
     return () => {
       document.removeEventListener('pointerdown', onDocumentPointerDown, {
         capture: true
       });
       document.removeEventListener('keydown', onDocumentKeyDown);
       window.removeEventListener('drop', onWindowFileDrop, true);
+      window.removeEventListener('dragover', onWindowDragOver, true);
+      clearTimeout(springTimer);
     };
   });
 </script>
@@ -1090,15 +1117,17 @@
       />
     </div>
     <div
+      bind:this={treeEl}
       role="group"
       aria-label={tUi('fileTree.tree')}
       class="themed-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3 text-[13px]"
       class:ring-1={dragOver === 'root'}
+      class:ring-inset={dragOver === 'root'}
       class:ring-ring={dragOver === 'root'}
       data-file-drop-accept={fileDropAccept}
-      ondragover={onDragOverRoot}
+      ondragover={(e) => onTreeDragOver(e, null)}
       ondragleave={onDragLeave}
-      ondrop={onDropOnRoot}
+      ondrop={(e) => onTreeDrop(e, null)}
       onpointerdown={onTreePointerDown}
     >
       {#if tree.error}
@@ -1262,12 +1291,12 @@
       oncontextmenu={(e) => openMenu(e, { kind: 'folder', id: node.id })}
       ondragstart={(e) => onFolderDragStart(e, node.id)}
       ondragend={onDragEnd}
-      ondragover={(e) => onDragOverFolder(e, node.id)}
+      ondragover={(e) => onDragOverFolder(e, node)}
       ondragleave={onDragLeave}
-      ondrop={(e) => onDropOnFolder(e, node.id)}
+      ondrop={(e) => onTreeDrop(e, node.id)}
     >
       <ChevronRight
-        class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''}`}
+        class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''} ${node.children.length === 0 ? 'invisible' : ''}`}
       />
       <!-- Folders are amber so the tree's structure reads at a glance without
            competing with the brand colour that marks the open note. -->
@@ -1299,7 +1328,6 @@
       </div>
     {/if}
   {:else}
-    {@const isOver = dragOver === `n:${node.id}`}
     {@const isSelected = selectedKeySet.has(nodeKey(node) as SelectionKey)}
     {@const renaming =
       rename && rename.kind === 'note' && rename.id === node.id}
@@ -1320,14 +1348,14 @@
       role="group"
       draggable={canDragItem({ kind: 'note', id: node.id })}
       class="file-tree-note-row group flex w-full items-center gap-0.5 rounded-md pr-1 hover:bg-accent hover:text-accent-foreground"
-      class:bg-accent={isOver || isSelected}
+      class:bg-accent={isSelected}
       class:active-note={ui.activeNoteId === node.id}
       class:opacity-60={drag?.kind === 'note' && drag.id === node.id}
       ondragstart={(e) => onNoteDragStart(e, node.id)}
       ondragend={onDragEnd}
-      ondragover={(e) => onDragOverNote(e, node.id)}
+      ondragover={(e) => onTreeDragOver(e, noteParentId(node.id))}
       ondragleave={onDragLeave}
-      ondrop={(e) => onDropOnNote(e, node.id)}
+      ondrop={(e) => onTreeDrop(e, noteParentId(node.id))}
     >
       <button
         type="button"
