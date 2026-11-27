@@ -35,16 +35,20 @@ name, `No uuid found for page name "afi's 100 years/"`.
 
 ## Global graph, 20,000 notes
 
-| Graph                                         | First draw | Settled         | fps settling | fps zooming | fps after settling | Memory |
-| --------------------------------------------- | ---------: | --------------- | -----------: | ----------: | ------------------ | -----: |
-| Mindstream, notes and tags (44,824 / 457,555) |      1.0 s | 11 s            |        33–35 |       9–10¹ | 60, zoom 60        | 1.2 GB |
-| Obsidian, notes and tags (44,819 / 468,300)   |      3.0 s | not after 300 s |           11 |          11 | 1, zoom 1          | 4.6 GB |
-| Obsidian, existing notes (19,998 / 402,527)   |      1.6 s | 204 s           |            8 |           4 | 60 idle, zoom 3    | 4.0 GB |
-| Obsidian default (237,705 / 799,310)          |      4.0 s | not after 300 s |           10 |          11 | 2, zoom 2          | 3.9 GB |
+| Graph                                         | First draw | Settled         | fps settling | zoom, settling | fps after settling | Memory |
+| --------------------------------------------- | ---------: | --------------- | -----------: | -------------: | ------------------ | -----: |
+| Mindstream, notes and tags (44,824 / 457,555) |      1.0 s | 11 s            |        23–35 |            2–3 | 60 idle, zoom 4¹   | 1.2 GB |
+| Obsidian, notes and tags (44,819 / 468,300)   |      3.0 s | not after 300 s |           11 |             11 | 1, zoom 1          | 4.6 GB |
+| Obsidian, existing notes (19,998 / 402,527)   |      1.6 s | 204 s           |            8 |              4 | 60 idle, zoom 3    | 4.0 GB |
+| Obsidian default (237,705 / 799,310)          |      4.0 s | not after 300 s |           10 |             11 | 2, zoom 2          | 3.9 GB |
 
-¹ With one frame of 0.9–1.4 s each run. Obsidian's default draws a node for
-every link to a missing note; the "notes and tags" row is the like-for-like
-one. Its layout counts as settled when the renderer has had 60 frames
+¹ Most zoom frames take 17 ms, but each zoom burst stalls the main thread for
+0.8–1.2 s. The Mindstream zoom numbers come from two later runs of
+`bench:vault` on this code: the first harness sent its wheel events to the
+WebGL canvas, which has no listener, and measured an idle graph.
+
+Obsidian's default draws a node for every link to a missing note; the
+"notes and tags" row is the like-for-like one. Its layout counts as settled when the renderer has had 60 frames
 without an update, ours when the layout worker has been quiet for a second.
 
 ## 28 notes
@@ -70,6 +74,8 @@ Mindstream's search includes its 100 ms debounce.
 - **Local graph:** the first open loads every link in the vault
   (`loadNoteLinks` in `src/lib/notes/note-relations.ts`): 640 ms in
   `list_note_links`, the rest on the main thread.
+- **Zoom:** not profiled yet. Long tasks fill 1.9–3.5 s of every 2 s zoom
+  window, settled or not.
 - **Import:** not profiled yet.
 
 ## Caveats

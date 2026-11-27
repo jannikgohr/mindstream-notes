@@ -117,10 +117,12 @@ export function frames(page, ms) {
 }
 
 /**
- * Ten wheel steps in, then ten out, over two seconds, on the biggest canvas
- * under `selector`. Dispatched from inside the page: input sent through the
- * browser waits for each frame, and a frame of a big graph rasterised in
- * software can take seconds. Measure with `frames` right after.
+ * Ten wheel steps in, then ten out, over two seconds, at the centre of the
+ * biggest canvas under `selector`, sent to whatever element is on top there,
+ * as a real wheel would be. Dispatched from inside the page: input sent
+ * through the browser waits for each frame, and a frame of a big graph
+ * rasterised in software can take seconds. Measure with `frames` right
+ * after.
  */
 export function zoom(page, selector) {
   return page.evaluate((selector) => {
@@ -128,15 +130,17 @@ export function zoom(page, selector) {
       (a, b) => b.width * b.height - a.width * a.height
     )[0];
     const { left, top, width, height } = canvas.getBoundingClientRect();
+    const [x, y] = [left + width / 2, top + height / 2];
+    const target = document.elementFromPoint(x, y) ?? canvas;
     const end = performance.now() + 2000;
     let sent = 0;
     const timer = setInterval(() => {
       if (performance.now() > end || sent === 20) return clearInterval(timer);
-      canvas.dispatchEvent(
+      target.dispatchEvent(
         new WheelEvent('wheel', {
           deltaY: sent++ < 10 ? -120 : 120,
-          clientX: left + width / 2,
-          clientY: top + height / 2,
+          clientX: x,
+          clientY: y,
           bubbles: true,
           cancelable: true
         })
@@ -206,27 +210,35 @@ export async function launch(
   let stderr = '';
   proc.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-4000)));
   let browser;
-  while (!browser) {
-    if (proc.exitCode !== null)
-      throw new Error(`${bin} exited with ${proc.exitCode}: ${stderr}`);
-    if (performance.now() - t0 > 120_000)
-      throw new Error(`${bin} opened no DevTools port`);
-    browser = await chromium
-      .connectOverCDP(`http://127.0.0.1:${port}`)
-      .catch(() => null);
-    if (!browser) await sleep(50);
-  }
   let page;
-  while (!page) {
-    for (const context of browser.contexts())
-      for (const candidate of context.pages())
-        if (
-          !candidate.url().startsWith('devtools') &&
-          (await pick(candidate).catch(() => false))
-        )
-          page = candidate;
-    if (!page) await sleep(50);
-    if (performance.now() - t0 > 120_000) throw new Error(`${bin}: no window`);
+  try {
+    while (!browser) {
+      if (proc.exitCode !== null)
+        throw new Error(`${bin} exited with ${proc.exitCode}: ${stderr}`);
+      if (performance.now() - t0 > 120_000)
+        throw new Error(`${bin} opened no DevTools port`);
+      browser = await chromium
+        .connectOverCDP(`http://127.0.0.1:${port}`)
+        .catch(() => null);
+      if (!browser) await sleep(50);
+    }
+    while (!page) {
+      for (const context of browser.contexts())
+        for (const candidate of context.pages())
+          if (
+            !candidate.url().startsWith('devtools') &&
+            (await pick(candidate).catch(() => false))
+          )
+            page = candidate;
+      if (!page) await sleep(50);
+      if (performance.now() - t0 > 120_000)
+        throw new Error(`${bin}: no window`);
+    }
+  } catch (error) {
+    await browser?.close().catch(() => {});
+    proc.kill('SIGTERM');
+    await exited(proc);
+    throw error;
   }
   return {
     proc,
