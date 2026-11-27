@@ -272,6 +272,8 @@ export function createPageOverlays(
     );
     for (const annotation of pageAnnotations) {
       const rectCount = annotation.rects.length;
+      const selected = annotation.id === host.params.selectedAnnotationId;
+      const bounds = { left: Infinity, top: Infinity, right: 0, bottom: 0 };
       for (const [rectIndex, rect] of annotation.rects.entries()) {
         const [x1, y1] = viewport.convertToViewportPoint(rect.x, rect.y);
         const [x2, y2] = viewport.convertToViewportPoint(
@@ -282,10 +284,18 @@ export function createPageOverlays(
         const top = Math.min(y1, y2);
         const width = Math.abs(x2 - x1);
         const height = Math.abs(y2 - y1);
+        bounds.left = Math.min(bounds.left, left);
+        bounds.top = Math.min(bounds.top, top);
+        bounds.right = Math.max(bounds.right, left + width);
+        bounds.bottom = Math.max(bounds.bottom, top + height);
         const node = document.createElement('div');
         node.className = `pdf-app-annotation pdf-app-annotation-${annotation.type}`;
-        if (annotation.id === host.params.selectedAnnotationId) {
-          node.classList.add('pdf-app-annotation-selected');
+        if (selected) {
+          node.classList.add(
+            rectCount === 1
+              ? 'pdf-app-annotation-selected'
+              : 'pdf-app-annotation-framed'
+          );
         }
         if (annotation.resolved) {
           node.classList.add('pdf-app-annotation-resolved');
@@ -443,6 +453,18 @@ export function createPageOverlays(
           activateAnnotation(annotation);
         });
         layer.append(node);
+      }
+      // One frame around every line of a multi-line selection; an outline per
+      // rect would cross into the lines above and below.
+      if (selected && rectCount > 1) {
+        const frame = document.createElement('div');
+        frame.className = 'pdf-app-annotation-selection';
+        frame.setAttribute('aria-hidden', 'true');
+        frame.style.left = `${bounds.left}px`;
+        frame.style.top = `${bounds.top}px`;
+        frame.style.width = `${bounds.right - bounds.left}px`;
+        frame.style.height = `${bounds.bottom - bounds.top}px`;
+        layer.append(frame);
       }
     }
 
