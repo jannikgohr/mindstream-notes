@@ -192,14 +192,17 @@ try {
   results.pssMB.graph = pssMB(obsidian.proc.pid);
 
   // The renderer stops drawing after 60 frames without layout updates.
-  results.graphSettled = await until(
+  // The deadline runs from opening the graph, as in bench:vault.
+  const settle = Number(values.settle) * 1000;
+  const settled = await until(
     page,
     () =>
       window.app.workspace.getLeavesOfType('graph')[0].view.renderer
         .idleFrames > 60,
     null,
-    { t0: g0, timeout: Number(values.settle) * 1000 }
+    { t0: g0, timeout: Math.max(0, g0 + settle - performance.now()) }
   ).catch(() => null);
+  results.graphSettled = settled !== null && settled <= settle ? settled : null;
   log('settled', results.graphSettled);
   results.graphLateFrames = await frames(page, 5000);
   await zoom(page, tab);
