@@ -134,11 +134,11 @@ need the Wasm toolchain.
 
 ## Storage choices
 
-The proof pins `rusqlite` 0.39.0, `sqlite-wasm-rs` 0.5.5, and
-`sqlite-wasm-vfs` 0.2.0. Rusqlite 0.39 uses SQLite Wasm's 0.5 ABI. The VFS
-release uses the matching `rsqlite-vfs` 0.1 ABI. The lockfile pins the full
-graph, including `wasm-bindgen` 0.2.126. Changing just one of these versions
-requires rebuilding and repeating the browser checks.
+`src-tauri/browser-wasm/Cargo.toml` pins `rusqlite`, `sqlite-wasm-rs`,
+`sqlite-wasm-vfs` and `wasm-bindgen` exactly. Rusqlite links a specific SQLite
+Wasm ABI and the VFS a matching `rsqlite-vfs` ABI, so change them together,
+rebuild and repeat the browser checks. The `wasm-bindgen-cli` you install must
+match the pinned `wasm-bindgen`.
 
 A dedicated worker owns one connection and one OPFS sync-access-handle pool.
 It uses rollback journals and `synchronous=FULL`. Native connections keep
@@ -163,22 +163,12 @@ policy and private browsing behavior still need product-level handling.
 
 ## What the checks cover
 
-The native and Wasm builds call the same migration runner and behavior check.
-The browser tests exercise the compiled Rust and OPFS, with no mocked SQLite.
-They verify fresh migration through schema 34, upgrades of eleven populated
-historical schemas, migration idempotence, FTS5 trigram queries and update
-triggers, rollback, committed writes, foreign-key enforcement, and deterministic
-CRDT seed merging. Upgrade checks retain note content and asset hashes.
-
-Playwright checks reload persistence, explicit close and reopen, second-tab
-refusal, ownership transfer, and owner-tab termination. The transport unit
-tests cover response correlation, structured errors, validation, worker
-failure, timeout, reconnecting after failure, and shutdown failure. Real-app tests create and edit a note
-through the existing Svelte editor, reload with the HTTP cache disabled, close
-the tab, and reopen the note. Immediate reload and close cases exercise the
-save debounce, including source edits before they reach the live document.
-They also verify folders, tags, favourites,
-attachment bytes, history, Yjs state, trash and restore, and owner-tab handoff.
+The native and Wasm builds call the same migration runner and behaviour check,
+and the browser tests run the compiled Rust against real OPFS with no mocked
+SQLite: fresh migration, upgrades from populated older schemas, FTS5,
+rollback and CRDT seed merging. Playwright covers reload and close persistence
+through the real editor (including edits still inside the save debounce),
+second-tab refusal, ownership transfer and owner-tab termination.
 
 The production tests pass in Chromium and Firefox. The WebKit project uses a
 separate persistent profile per test because its temporary contexts disable
@@ -266,12 +256,13 @@ in the browser's file handles, and Rust reads one range at a time through a
 A browser has nowhere to unpack a `.jex`, so `TarFiles` reads it in place. A
 folder pick does not report empty folders, so those are not created.
 
-A worker busy in Rust cannot read a cancel message, so **Stop** terminates it.
-Committed batches stay and the batch in flight rolls back. The report uses the
-last progress update's committed counts for notes, folders, attachments, links,
-and errors. A terminated worker releases the vault lock
-a moment later, so reopening after one waits briefly for that, or the next call
-would report another tab.
+The whole import is one transaction. Batches still flush every 500 notes or
+64 MiB of attachments, so SQLite spills uncommitted pages to the database file
+under its rollback journal instead of holding them in memory. A worker busy in
+Rust cannot read a cancel message, so **Stop** terminates it; reopening rolls
+the journal back, so nothing is imported. A terminated worker releases the
+vault lock a moment later, so reopening after one waits briefly for that, or
+the next call would report another tab.
 
 `e2e-tests/sqlite/fixtures/native-backup.zip` is a real native backup. Generate a
 new one from `run_backup_at` when the format changes, and keep it readable by
@@ -286,8 +277,7 @@ plugin that transpiles each component with jco when it is imported as
 `plugin.wasm?component`. Vitest uses it too, so the unit tests run the shipped
 components. It inlines the core modules as base64 and strips jco's
 `new URL(..., import.meta.url)` fallback, which Vite would otherwise turn into
-an asset glob over the plugin folder. Each component is a lazy chunk of about
-200 KB.
+an asset glob over the plugin folder. Each component is its own lazy chunk.
 
 `src/lib/plugins/browser-host.ts` implements the host interfaces. Its clock,
 frontmatter writer, permission checks and refusal messages follow

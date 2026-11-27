@@ -13,7 +13,7 @@ under `patches/`, listed in `patchedDependencies` in `pnpm-workspace.yaml`, so
 that frozen-lockfile installation applies it in local builds and CI.
 
 Move across a major version in a dedicated migration. Review the components
-we use: Dialog, AlertDialog, Select, Popover, Tabs, and Portal, plus the
+we use: Dialog, AlertDialog, Select, Popover, Tabs, Calendar and Portal, plus the
 WithElementRef type. Check the release notes for the candidate version,
 rather than applying examples for a different version.
 
@@ -25,7 +25,9 @@ For a Bits UI, Svelte, or supporting dependency update:
    browser behavior test.
 3. Run `pnpm check`, `pnpm test`, `pnpm build`, and
    `pnpm test:e2e:dialogs`. The dialog command builds production assets and
-   runs the importer in Chromium and WebKit without test retries.
+   runs the importer in Chromium and WebKit. Run it locally, where Playwright
+   does not retry; CI retries failed tests twice, which can hide a flaky
+   focus bug.
    The runner always starts a fresh production preview, matching CI; it fails
    if another process owns port 1440 rather than testing an unknown build.
 4. Run the packaged-app tests in Linux CI. Playwright WebKit helps catch
@@ -33,7 +35,7 @@ For a Bits UI, Svelte, or supporting dependency update:
    environment completely. Ready PRs enable E2E; for a draft use the existing
    `ci:app-e2e` label or dispatch Test manually.
 5. Remove a patch only when these behavior tests pass without it, including
-   genuine close and reopen behavior. Record that result in this file.
+   genuine close and reopen behavior.
 
 Do not combine a library migration with unrelated workflow changes. A green
 type check proves API compatibility, not correct focus behavior.
@@ -48,21 +50,12 @@ to a button. `1.0.0-next.78` focused the Cancel button instead.
 ImportNotesDialog overrides the default to focus its persistent Cancel/Stop
 button, because the other controls are replaced at every stage change.
 
-## Removed focus-scope patch
+## Why there is no focus-scope patch
 
-Until the move to `2.19.5` the project pinned `1.0.0-next.78` with a patch to
-`use-focus-scope.svelte.js`. That version deferred a focus scope's removal by
-a zero-delay timer. The importer changes its content from source selection to
-configuration while Settings remains open, and its scope registered again
-before the timer ran. The stale callback then removed the live importer scope
-and resumed Settings, leaving both dialogs trapping focus. Focusing an import
-field bounced between the two until the stack overflowed. The patch made the
-callback skip a scope that had registered again.
-
-Bits UI `2.8.1` rewrote the focus scope. Removal is synchronous, and only the
-scope on top of the stack traps focus, so the patch has no code left to
-guard. `pnpm test:e2e:dialogs` passes on `2.19.5` without it in Chromium and
-WebKit.
+`1.0.0-next.78` needed a patch because it removed a focus scope on a timer, so
+the importer's re-registered scope could be removed and both it and Settings
+trapped focus. Since `2.8.1` removal is synchronous and only the top scope
+traps focus.
 
 ## Dialog behavior to test
 

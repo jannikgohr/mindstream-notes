@@ -1,41 +1,19 @@
 # First-run setup
 
 Fresh release installations open setup before the workspace. Existing installs
-keep opening their workspace. Setup can also be opened from Settings > General >
-Run setup again.
+keep opening their workspace. Setup can also be opened from Settings → General →
+**Run setup again**.
 
 The four steps cover account connection, appearance, editing, and initial
 content. The first step offers **Skip and use offline with default settings**,
 or **Skip and keep current settings** for an existing vault. Managed hosting is
 unavailable until a working service is configured.
 
-Back and Continue stay in a bottom bar while the step content scrolls above it.
-The progress indicator connects steps with lines, highlighting completed
-connections. On phones, choices use compact rows and only the current step name
-is shown. Skip floats above the footer, aligned with Continue's right edge.
-Its faint pill background and reduced opacity keep it secondary. The mobile
-footer uses 44 px touch targets with an even 8 px gutter on every side; on
-devices with a home indicator the bottom safe area replaces that gutter rather
-than adding to it. Extra scroll
-spacing keeps the last controls clear of the button. The divider sits immediately
-above Back and Continue, whose positions remain fixed across steps. Repeated
-taps on Back cannot activate Skip after returning to the first screen.
-The header uses the real app logo and the shared themed language dropdown,
-which leads with a language icon so it reads as a language picker without the
-text label phones hide. The sign-in form sits directly under the account
-choices in its own single card.
-The header and bottom bar respect the device's safe areas.
-
-Appearance uses the app's shared Surface, SectionHeader, Input, Button, and
-Toolbar components. Slate & Indigo, Apollo, Paper & Teal, Warm, Forest, and custom
-presets provide their own light and dark accents. Preset, mode, UI size, editor
-size, and line spacing update the sample workspace immediately. The preview uses
-the same editor surface as the workspace. While dragging UI font size, only the
-sample scales; the rest of the app applies the size on release so the slider
-stays in place. Editor text size remains independent of UI size.
-The editing step has a temporary Milkdown
-editor, Markdown source, and a synchronized split preview. Practice changes do
-not create or modify real notes.
+Preset, mode, UI size, editor size and line spacing update the sample
+workspace immediately. While dragging UI font size only the sample scales; the
+rest of the app applies the size on release, so the slider stays under the
+pointer. The editing step uses a temporary Milkdown editor, Markdown source and
+a split preview. Practice changes do not create or modify real notes.
 
 ## Development
 
@@ -54,8 +32,8 @@ the same launch retain the current step.
 
 For browser development, run `pnpm dev` and open
 `http://localhost:1420/?onboarding`. The query is consumed once; browser progress
-is kept locally so reloading resumes setup. Browser previews use the existing
-mock vault and preserve its demo notes. Account sign-in requires the native app.
+is kept locally so reloading resumes setup. Account sign-in requires the native
+app.
 
 ## Persistence
 
@@ -88,23 +66,10 @@ The "Welcome notes" choice adds an introduction, sync and live collaboration,
 import/export and backup, and everyday tips in English or German. The welcome
 note opens first. Links between demo notes are resolved to the target note's
 content-derived ID before rendering, so they keep working after a rename. The
-browser fallback uses the same IDs and editor state as native setup.
+browser build uses the same IDs and editor state as native setup.
 
-## Verification
+## Tests
 
-```sh
-pnpm test -- src/lib/api/onboarding.test.ts src/lib/hotkeys/presets.test.ts src/lib/onboarding/demo-notes.test.ts
-pnpm test:e2e 'onboarding\.spec\.ts$' --project chromium --workers 1
-cd src-tauri
-cargo test --lib onboarding::tests
-cargo test --lib demo_notes
-cargo test --lib vault_runtime::tests
-```
-
-The browser suites cover opt-in development launches and fresh-install progress,
-both skip labels, remote-account gating, all completion choices, settings relaunch,
-temporary practice edits, live appearance previews, keyboard preset selection,
-progress recovery, and import/restore cancellation. Mobile coverage includes
-320 px layouts, equal step connectors, fixed bottom controls, and repeated Back
-taps. They use the browser fallback store; native sign-in and the backup file
-picker remain part of packaged-app validation.
+The browser suite (`e2e-tests/browser/onboarding.spec.ts`) runs against the mock
+store, so native sign-in and the backup file picker remain part of packaged-app
+validation.

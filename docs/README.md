@@ -47,4 +47,4 @@ Start with the [README](../README.md) for what the app is and where to get it.
 - [Contributing](../CONTRIBUTING.md): branches, commit messages, git hooks,
   tests and coverage
 - [Internal documentation](internal/README.md): architecture, design notes,
-  plans, test docs and audits for people working on the code
+  test docs and security notes for people working on the code

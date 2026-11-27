@@ -77,17 +77,9 @@ You can keep writing without a connection. Changes wait on the device and go
 out at the next sync, and a notification says when the server cannot be
 reached or has signed the device out.
 
-When two devices change the same note:
-
-- Edits to the content are merged, so both sets of changes survive.
-- A new title, a move to another folder or a move to the trash is not merged.
-  The change synced last wins.
-- A note deleted on one device while another device edits it comes back, with
-  those edits. Sync never throws away work that has not been sent.
-
-Version history stays on each device. Restoring a version changes the note
-everywhere, but the list of earlier versions, and the **Undo** after a restore,
-belong to the device that has them.
+When two devices change the same note, edits to its content merge. Renames,
+moves and deletes, and version history, follow the rules in
+[known limitations](known-limitations.md#sync-and-sharing).
 
 A server can set storage limits for an account. Changes that would go past a
 limit stay on the device, a notification names the limit, and the app sends
@@ -131,9 +123,6 @@ person you removed if they have another account.
 **Stop sharing…** does that for everyone at once, and you keep the folder.
 Someone you shared with can choose **Leave shared folder…**.
 
-The welcome notes setup adds cannot go into a shared folder. Copy their text
-into a new note instead.
-
 ### Invite links
 
 To invite people without knowing their usernames, open **Manage access…** and
@@ -171,7 +160,7 @@ A drawing canvas can embed web pages, such as a Figma file or a Vimeo video.
 In a drawing of your own, any https page loads. In a shared folder, anyone who
 can edit a drawing chooses what its embeds show, so there they only load from
 YouTube, Vimeo, Figma, StackBlitz and a few other well-known sites. An embed
-from any other site shows its address and an **Allow** button instead. Allowing
+from any other site shows its address and a button to allow that site instead. Allowing
 a site applies to every shared drawing in the vault. The sites you allowed are
 listed under **Settings → Editor → Drawing canvas**, where you can remove them.
 YouTube videos don't play inside drawings on Linux and macOS, see

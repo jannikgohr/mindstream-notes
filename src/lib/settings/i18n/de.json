@@ -1244,7 +1244,7 @@
     "theme.preset.warm": "Warm",
     "theme.preset.forest": "Wald",
     "theme.missingOption": "Fehlende Vorlage: {id}",
-    "theme.missing": "Diese Vorlage ist nicht verfügbar. Apollo wird angezeigt, deine Auswahl bleibt erhalten.",
+    "theme.missing": "Diese Vorlage ist nicht verfügbar. Schiefer & Indigo wird angezeigt, deine Auswahl bleibt erhalten.",
     "theme.editJson": "Vorlagen-JSON anzeigen",
     "theme.remove": "Vorlage entfernen",
     "theme.import": "Vorlage importieren oder bearbeiten",

@@ -51,5 +51,5 @@ and nothing else.
 
 ## Where it will live
 
-Undecided. See the open points in
-[docs/internal/server-design.md](../../docs/internal/server-design.md#open-points).
+In a private repository, not this one. The reasons are in
+[docs/internal/server-design.md](../../docs/internal/server-design.md#billing).

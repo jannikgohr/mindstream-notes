@@ -20,9 +20,13 @@ ordering constraint, and a cycle of any length is not a special case.
 
 - Only one note body is in memory at a time. What grows with the vault is the
   link index, a few entries per note, held for the whole run.
-- Notes are written 500 per transaction. Stopping an import keeps everything
-  already written, and the database is released between batches so the app
-  stays usable.
+- Notes are written in batches of 500, or fewer once a batch holds 64 MiB of
+  attachments, so memory stays bounded.
+- Natively the whole import is one transaction on a connection of its own
+  (`run_import` in `src-tauri/src/import/mod.rs`). A cancel, a failure or a
+  crash leaves none of it. The app keeps reading the vault as it was, and the
+  frontend holds its writes until the import ends
+  (`src/lib/storage/import-activity.svelte.ts`).
 - Notes are written directly rather than through the normal note-creation path,
   which does two extra database round trips per note.
 - The run happens off the UI thread and reports progress as it goes.
@@ -33,8 +37,6 @@ part.
 
 ## The Wikipedia performance vault
 
-`pnpm bench:vault` (see the [e2e README](../../e2e-tests/README.md)) builds an
-Obsidian vault from Simple English Wikipedia, with `[[links]]`, categories as
-tags and redirects as aliases, imports it into the browser build and times the
-import and the file-tree reload among other steps. Links to articles outside
-the chosen number stay unresolved, which exercises that path too.
+`pnpm bench:vault` imports a vault built from Simple English Wikipedia into the
+browser build and times the import and the file-tree reload. How to run it is in
+the [e2e README](../../e2e-tests/README.md).

@@ -2,9 +2,10 @@
 
 A plugin is a folder with a `manifest.json` and any assets it refers to. A
 manifest-only plugin contributes data, such as settings, templates or a text
-checker. An executable plugin adds a `.wasm` component that runs in the app's
-Rust backend. The host controls permissions, resource limits and every effect a
-plugin has. How people install and approve plugins is in [Plugins](plugins.md).
+checker. An executable plugin adds a `.wasm` component that the host runs in a
+sandbox: in the Rust backend on desktop and Android, and in the page in the
+browser version, which runs only the core plugins. The host controls
+permissions, resource limits and every effect a plugin has. How people install and approve plugins is in [Plugins](plugins.md).
 
 ## Getting started
 
@@ -111,10 +112,11 @@ asymmetric:
   The host counts the PDF pages and invokes the same export once per page,
   adding a one-based `page` to the input. Each call returns a single image file.
   One-page exports save directly; multiple pages are saved as a ZIP with
-  numbered filenames. The Typst plugin uses this protocol.
+  numbered filenames. A document over 1,000 pages is refused. The Typst plugin uses this protocol.
 
 - **`noteTemplates`** — declarative templates (`titleTemplate` / `bodyTemplate`
-  with `{{…}}` placeholders, see below). Requires `notes.create`.
+  with `{{…}}` placeholders, see below). Creating a note from one needs
+  `notes.create`; without it the template is listed but fails when used.
 - **`commands`** — app-local commands, each listed in the command palette and
   bindable to a hotkey. The action is `createTemplateNote` or
   `{ "type": "script", "export": "…" }`, which runs the export and performs the
@@ -143,10 +145,9 @@ asymmetric:
   `docs/getting-started.de.md` is used for German, falling back to
   `docs/getting-started.md`. Paths are relative to the plugin folder and must be
   safe (`.md`, no `..`).
-- **`toolbar`** (executable runtimes) — buttons the plugin adds to a host
-  toolbar (currently the file-tree toolbar). Each ships its own bundled `.svg`
-  icon, rendered as a themed monochrome mask, and runs a backend script export
-  on click:
+- **`toolbar`** — buttons the plugin adds to a host toolbar. A `file-tree`
+  button ships its own bundled `.svg` icon, rendered as a themed monochrome
+  mask, and runs a script export on click, so it needs the `wasm` runtime:
 
   ```jsonc
   "toolbar": [{
@@ -183,6 +184,30 @@ asymmetric:
   Permission and note checks still apply when the action runs. Hidden actions
   keep their place in the toolbar.
 
+  A `note-editor` button appears in the editor toolbar of one of the plugin's
+  own `noteKind`s. Instead of a script it can apply a host-owned text edit,
+  which needs no runtime: `{ "type": "insertText", text, cursorOffset? }` or
+  `{ "type": "wrapSelection", before, after, placeholder? }`. With
+  `toolbarItem` set to a built-in item (`bold`, `italic`, `p`, `h1`–`h6`,
+  `ordered`, `bullet`, `task`, `image`, `code`, `table`, `math` or `mermaid`)
+  it takes that item's icon and label, so `icon` and `labelKey` can be left
+  out. The Typst plugin's formatting buttons work this way:
+
+  ```json
+  {
+    "id": "strong",
+    "location": "note-editor",
+    "noteKind": "document",
+    "toolbarItem": "bold",
+    "action": {
+      "type": "wrapSelection",
+      "before": "*",
+      "after": "*",
+      "placeholder": "strong"
+    }
+  }
+  ```
+
 ### Placeholder syntax (declarative templates)
 
 `titleTemplate` / `bodyTemplate` support `{{ base [offset] [:format] [|filter] }}`:
@@ -216,21 +241,6 @@ A manifest is rejected if it contributes something it did not ask permission
 for. The permission list is what people see when they approve the plugin, so it
 has to be complete. Settings → Plugins shows it with friendly labels, beside the
 `descriptionKey` tagline and the plugin's documentation.
-
-### Permissions are pinned at approval
-
-Approving a third-party plugin pins three things: its package digest, its
-signer, and **the permission set the user was shown**.
-
-An update signed by the same key is approved without asking again, but only for
-the permissions already approved. An update may **narrow** its permissions
-freely; one that **widens** them waits for a new approval that names the added
-permissions. Core plugins are exempt, because they ship inside the app.
-
-The check also runs every time plugin code runs, not only when the app finds
-the plugin. Each call re-reads the plugin from disk and compares its digest to
-the approved one, so editing an approved plugin while the app is running does
-not get the new bytes run under the old approval.
 
 ## TypeScript plugins
 
@@ -290,19 +300,13 @@ cancellation too. Disabling, removing or crashing a plugin cancels its running
 calls. At most four calls run at once; a busy caller waits up to five seconds.
 Components are limited to 32 MiB and returned JSON to 64 MiB.
 
-Each imported host call also has a fixed **9 MiB budget for copying its
-arguments** out of guest memory. It is checked while the arguments are lifted,
-before the host handler runs, counts container overhead as well as data, and
-cannot be raised through manifest limits. It leaves room for 8 MiB of UTF-8
-native-tool stdin plus 256 KiB of arguments and binding overhead. Strings count
-in the component's canonical encoding, so UTF-16 arguments can reach the budget
-before they reach the scalar API's UTF-8 text limit.
-
-Exhausting that budget traps and ends the invocation. It does not return a
-catchable `HostError` or a batch failure record, and effects from earlier host
-calls are not rolled back. The budget does not cap host RSS, native-tool output
-or results returned to the guest. Invocation results keep their own 64 MiB
-UTF-8 JSON limit. MiB means 1,048,576 bytes; text sizes count UTF-8 bytes.
+Each host call can copy at most **9 MiB of arguments** out of guest memory,
+counting container overhead, and manifest limits cannot raise it. That fits
+8 MiB of native-tool stdin with room to spare, but strings count in the
+component's own encoding, so UTF-16 arguments reach it sooner. Going over traps
+and ends the invocation: there is no catchable `HostError`, and effects of
+earlier host calls stay. MiB means 1,048,576 bytes; text sizes count UTF-8
+bytes.
 
 | Operation             | Limit                                                                      |
 | --------------------- | -------------------------------------------------------------------------- |
@@ -310,14 +314,9 @@ UTF-8 JSON limit. MiB means 1,048,576 bytes; text sizes count UTF-8 bytes.
 | Native-tool stdin     | 8 MiB                                                                      |
 | Native-tool arguments | 64 arguments, at most 4,096 bytes each                                     |
 | Native-tool timeout   | 10 seconds by default, clamped to 100 ms to 30 seconds and the wall budget |
-| Batch request         | 128 commands, 1,024 text inputs, 1 MiB total literal data                  |
-| Batch results         | 8 MiB accounted cumulative data, including unkept results                  |
 
-A batch request is validated after its arguments are lifted and before any of
-its operations run, so a request over the 1 MiB literal limit that fits the
-9 MiB budget gets a normal validation failure. See
-[the batch contract](plugin-batch-api.md#the-general-batch-contract) for
-failure phases and recovery.
+Batches have their own limits; see
+[the batch contract](plugin-batch-api.md#the-general-batch-contract).
 
 ### Effects (toolbar buttons, commands)
 
@@ -326,17 +325,17 @@ A toolbar button's or script command's export is called with the context object 
 behalf. The plugin computes, the app acts, and the plugin never touches the
 page:
 
-| Effect                                                        | Does                                                                              |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `{ effect: "none" }`                                          | nothing                                                                           |
-| `{ effect: "toast", message, kind? }`                         | show a toast (`kind` `"info"`\|`"error"`)                                         |
-| `{ effect: "createNote", title, body, parentId? }`            | create + open a note (needs `notes.create`)                                       |
-| `{ effect: "createNoteFromNote", sourceNoteId, parentId? }`   | copy a source note (interpolated) into a new one                                  |
-| `{ effect: "insertMarkdown", markdown }`                      | insert Markdown at the active note's cursor                                       |
-| `{ effect: "openMenu", items: [{ label, run: <effect> }] }`   | show a menu; each item runs its nested effect                                     |
-| `{ effect: "openNote", noteId, preview? }`                    | open a note (needs `notes.read`)                                                  |
-| `{ effect: "openOrCreateNote", title, parentId?, template? }` | open the note with that title in that folder, or create it (needs `notes.create`) |
-| `{ effect: "openTabView", viewId }`                           | open, or bring forward, one of the plugin's own `tabViews`                        |
+| Effect                                                        | Does                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `{ effect: "none" }`                                          | nothing                                                                               |
+| `{ effect: "toast", message, kind? }`                         | show a toast (`kind` `"info"`\|`"error"`)                                             |
+| `{ effect: "createNote", title, body, noteKind?, parentId? }` | create + open a Markdown note or one of the plugin's own kinds (needs `notes.create`) |
+| `{ effect: "createNoteFromNote", sourceNoteId, parentId? }`   | copy a source note (interpolated) into a new one (needs `notes.create`)               |
+| `{ effect: "insertMarkdown", markdown }`                      | insert Markdown at the active note's cursor                                           |
+| `{ effect: "openMenu", items: [{ label, run: <effect> }] }`   | show a menu; each item runs its nested effect                                         |
+| `{ effect: "openNote", noteId, preview? }`                    | open a note (needs `notes.read`)                                                      |
+| `{ effect: "openOrCreateNote", title, parentId?, template? }` | open the note with that title in that folder, or create it (needs `notes.create`)     |
+| `{ effect: "openTabView", viewId }`                           | open, or bring forward, one of the plugin's own `tabViews`                            |
 
 `openOrCreateNote` is decided by the app against its live tree, one creation
 at a time per folder and title, so two quick calls make one note. A plugin's
@@ -352,21 +351,20 @@ its configured folder or tag and returns a menu of `createNoteFromNote`.
 
 ### The context object
 
-Every export is called with one `ctx` object, assembled from two halves:
+Every export is called with one `ctx` object:
 
-| Field          | Built by | Notes                                                                               |
-| -------------- | -------- | ----------------------------------------------------------------------------------- |
-| `settings`     | backend  | the plugin's stored settings, read from the backend's effective root/vault settings |
-| `folders`      | backend  | the vault folder tree; empty without `notes.read`                                   |
-| `now`          | backend  | RFC3339, from the host clock                                                        |
-| `activeNoteId` | frontend | the note on screen, or `null`                                                       |
-| `locale`       | frontend | the window's current locale                                                         |
+| Field          | Notes                                             |
+| -------------- | ------------------------------------------------- |
+| `settings`     | the plugin's effective settings for this vault    |
+| `folders`      | the vault folder tree; empty without `notes.read` |
+| `now`          | RFC3339, from the host clock                      |
+| `activeNoteId` | the note on screen, or `null`                     |
+| `locale`       | the window's current locale                       |
 
 Plus whatever the call itself is about: `noteId` and `body` for a note-kind
-render, `format` for an exporter, `vars` for a template.
-
-The backend's values win on a collision, so a plugin can rely on `settings`,
-`folders` and `now` whoever triggered the call.
+render, `format` for an exporter, `vars` for a template. The host fills in
+`settings`, `folders` and `now` itself, so a plugin can rely on them whoever
+triggered the call.
 
 ### Host API
 
@@ -390,8 +388,9 @@ Host refusals throw `HostError` with `kind` equal to `denied`, `invalid`,
 `unavailable` or `failed`. A missing permission is `denied`. Timeouts and
 cancellation stop the call rather than returning a catchable host error.
 
-The experimental `batch.execute` sends a list of these calls in one crossing;
-see [Batching host calls](plugin-batch-api.md).
+The experimental `batch.execute` sends a list of these calls, except
+`notes.query` and `notes.countByDay`, in one crossing; see
+[Batching host calls](plugin-batch-api.md).
 
 `notes.query({ folder?, days?, titles?, limit? })` filters in the host: `folder`
 is a folder id for the notes directly inside it or `null` for those outside
@@ -422,9 +421,6 @@ A note kind can set `render.requiresNativeTool` to let the host fall back to
 source-only mode before invoking its renderer. The Typst plugin pipes its
 source through `typst compile --format pdf - -` and returns a base64 PDF carrying
 all pages. Its preview service is a separate host-owned capability.
-
-SDK v0.1 has no inference, embeddings, semantic-search or handwriting
-functions.
 
 ## Source editor language modes
 
@@ -506,8 +502,7 @@ the command and **keep** the argument, which no pair of delimiters expresses.
 it overruns.** A pattern that is instant on your test file can still be
 exponential on someone's long unbroken line. When a grammar overruns, it is
 switched off **for the rest of the session** and the language falls back to its
-delimiters, with the reason shown against the plugin in Settings. Where no
-Worker exists (SSR, tests) patterns do not run at all.
+delimiters, with the reason shown against the plugin in Settings.
 
 Set `indentation` only where leading whitespace _means_ something, as in
 Markdown lists or Typst blocks, so a grammar checker does not report "more than
@@ -686,11 +681,6 @@ draws nothing; `orphans: false` leaves out nodes without links. Clicking a node
 sends `onSelect` with its ID. The layout runs off the page, so a graph of tens
 of thousands of nodes stays responsive. The Graph plugin is the example.
 
-A graph without a `focus` grows into place when it first shows, the oldest
-note first and a plugin's own node with the first note it is linked to. A
-button replays that. Someone who asked their system for less motion gets the
-finished graph at once.
-
 `forces` (`{ centre?, repel?, link?, linkDistance? }`) tunes the layout: the
 first three are shares of the usual strength, from 0 to 2, and `linkDistance`
 is the length a link rests at, from 10 to 200 with 40 the usual.
@@ -700,10 +690,8 @@ whether it links to them, they link to it, or both.
 `action` (`{ label, on }`) is a button over the top left corner of the graph,
 for a way back out of a narrowed view, say.
 
-A graph of a plugin with settings has a button that opens those settings
-beside it, with presets: named sets of the plugin's setting values that the
-user saves and switches between. Presets are kept with the vault, and a
-plugin does nothing to get them.
+A graph of a plugin with settings gets a button that opens them beside it,
+with presets the user can save; the plugin needs nothing for this.
 
 An `on` is either an effect, performed directly, or `{ event, value? }`, which
 calls `onEvent({ ...ctx, state, event, value })`. That returns
@@ -845,18 +833,14 @@ any leading `-` stripped so a value cannot pass itself off as a flag. Nothing
 runs through a shell either way, but these values come from the user, so they
 are constrained regardless.
 
-The host owns the whole lifecycle: it allocates the ports, writes the body to a
-temp file the server watches (rewritten on edit), waits for readiness, connects
-the control plane as the editor, and stops the process when the note closes or
-the app exits.
+The host owns the whole lifecycle: it allocates the ports, keeps the source
+file up to date and stops the process when the note closes or the app exits.
 
-## Editor setup and local tests
+## Local tests
 
-The TypeScript starter includes a strict `tsconfig.json`. Run `npm run typecheck`
-for the guest and use `@mindstream/plugin-sdk/testing` in Node tests against the
-built component. The harness provides an in-memory host with explicit
-permissions, notes, folders, settings, storage and mock native tools. It creates
-a fresh instance for every call, matching the app.
+Test a built TypeScript component in Node with the in-memory host in
+`@mindstream/plugin-sdk/testing`; see
+[Test the built component](../plugin-sdk/typescript/README.md#test-the-built-component).
 
 ## Signing your plugin
 
@@ -884,7 +868,13 @@ node sign-plugin.mjs dist/package --generate ../my-key.pem
 node sign-plugin.mjs dist/package --key ../my-key.pem
 ```
 
-The key is your identity as the plugin's author. An update signed with it
-installs without a prompt as long as it asks for no new permissions, so keep
-it secret. A lost key means every user approves your next release again by
-hand.
+The key is your identity as the plugin's author. Approving a third-party plugin
+pins its package digest, its signer and the permissions the user was shown. An
+update signed with the same key installs without a prompt as long as it asks
+for no new permissions; one that adds permissions waits for a new approval
+naming them. Keep the key secret. A lost key means every user approves your
+next release again by hand.
+
+The app also re-checks the digest every time plugin code runs, so editing an
+approved plugin's files while the app is running does not get the new bytes
+run under the old approval.

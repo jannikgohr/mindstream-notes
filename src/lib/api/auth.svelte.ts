@@ -38,7 +38,7 @@ export interface LoginInput {
 
 export interface SessionInfo {
   username: string;
-  /** Resolved server URL (managed → api.etebase.com, otherwise the user's). */
+  /** Resolved server URL (`MANAGED_SERVER_URL` for managed, otherwise the user's). */
   server_url: string;
 }
 

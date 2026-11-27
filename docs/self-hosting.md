@@ -107,19 +107,11 @@ Replace `192.168.1.50` with the server's actual LAN IP. In the app, use
 Use this if you already run a reverse proxy (for example, Caddy, nginx, Traefik,
 or an integrated proxy manager) that handles HTTPS certificates.
 
-Point your domain (for example, `notes.example.com`) at the reverse proxy.
-Configure it to proxy requests to the Mindstream server over HTTP/1.1:
-
-- `/api/`: API requests and live WebSocket connections (support WebSocket
-  upgrades).
-- `/join/`: invitation links.
-- `/healthz`: used by the app's **Check URL** button.
-
-Preserve the original `Host` header and forward `X-Forwarded-For`. Allow request
-bodies up to 75 MiB, the server's own limit; nginx accepts only 1 MiB unless you
-raise `client_max_body_size`. Do **not** expose `/admin/` through the public
-proxy. [Server configuration](server-configuration.md#reverse-proxy) has a
-complete nginx example.
+Point your domain (for example, `notes.example.com`) at the reverse proxy and
+have it forward `/api/` (with WebSocket upgrades), `/join/` and `/healthz` to
+the server over HTTP/1.1. Keep `/admin/` off the public proxy.
+[Reverse proxy](server-configuration.md#reverse-proxy) lists what else the proxy
+has to pass on, including bodies up to 75 MiB, and has a complete nginx example.
 
 **Proxy on the same host:** Keep `MINDSTREAM_BIND=127.0.0.1` and forward to
 `http://127.0.0.1:3735`.
@@ -127,8 +119,8 @@ complete nginx example.
 **Proxy on another host:** Set `MINDSTREAM_BIND=0.0.0.0` (or bind to an
 appropriate reachable private interface), run `docker compose up -d`, and
 forward to `http://<mindstream-host-ip>:3735`. **Firewall port 3735 so that only
-your reverse proxy can connect**, in front of the server: a `ufw` rule on it
-does not apply to ports Docker publishes. Configure `MINDSTREAM_TRUSTED_PROXIES` for the
+your reverse proxy can connect**, in front of the server as in Option A.
+Configure `MINDSTREAM_TRUSTED_PROXIES` for the
 proxy sources that the backend actually sees; Docker's published-port
 networking can make that source appear as its bridge gateway. Do not trust
 broad, untrusted networks merely to make forwarding work.
@@ -224,13 +216,9 @@ docker compose logs --tail=100 server
 docker compose exec server mindstream-server user list
 ```
 
-**Back up both** the `postgres` volume and the `blobs` volume. Docker names them
-after the folder, so `docker volume ls` lists them as `server_postgres` and
-`server_blobs`. PostgreSQL
-contains account records and encrypted data; the blob volume contains larger
-attachments and, by default, the authenticator secret key. One backup without
-the other is not sufficient. Also protect a copy of `.env`. See
-[Backups](server-administration.md#backups) for details.
+**Back up both** Docker volumes, `server_postgres` and `server_blobs`, and keep a
+copy of `.env`: one volume without the other is not enough. See
+[Backups](server-administration.md#backups).
 
 To upgrade, first make and verify a backup, then:
 

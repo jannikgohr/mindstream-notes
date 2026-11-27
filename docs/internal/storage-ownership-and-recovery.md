@@ -1,117 +1,67 @@
 # Storage ownership and recovery
 
-Native schema settings use root `ui-settings.json` for device preferences and
-vault `content-settings.json` for content/account preferences. Each versioned
-document has a revision, a validated `.previous` copy and a `.migrated` record.
-Initial migration retains raw browser buckets. Valid documents win over those
-inputs; malformed required inputs refuse migration. Only the default vault can
-inherit content from the old unscoped bucket. Unknown/plugin entries stay in
-the vault, while dynamic `hotkey.*` bindings stay at the root. Plugin settings with `scope: "V"` use the vault database; `D` values use root
-`plugin-settings.json`. Scripts and preview services read the merged backend values.
+Who owns each piece of on-disk state, how concurrent vault workers share it, and
+how startup recovers it. The runtime contract in `worker_registration.rs` is
+authoritative for protocol and storage versions; workers on an incompatible
+contract are kept out of shared-document migration and restore.
 
-Appearance presets, accent and UI font size are device preferences in root
-`ui-settings.json`. Editor font size and line height remain vault preferences.
-`appearance-migration-owner.json` pins the startup-selected vault's canonical
-directory before concurrent startup. Root values win; that vault seeds absent
-accent/font values once. Root `.device-appearance-migrated` publishes after the
-device document. Retries preserve an existing root value, and completion prevents
-a reset from resurrecting retained vault fields. Those former vault fields stay
-in `content-settings.json` as migration evidence and never override root values.
-Browser fallback retains original bucket bytes under
-`mindstream:appearance-source:v1:<vault>`.
+## Where settings live
 
-Root `theme-presets.json` stores a versioned map of user presets. Built-in IDs
-are immutable. Numeric, bounded OKLCH tokens cannot load CSS, scripts or URLs.
-RootLock serializes catalog edits across workers. A missing preset displays the
-built-in default without changing `appearance.preset`; restoring it restores the
-appearance. Catalog recovery retains corrupt bytes and promotes only a validated
-previous copy. Mode, accent and preset selection have independent precedence.
+| Document                                            | Holds                                                                                                                                                                  |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| root `ui-settings.json`                             | device preferences: appearance preset, accent, UI font size, sidebar widths, `hotkey.*` bindings                                                                       |
+| vault `content-settings.json`                       | content and account preferences: editor font size and line height, sorting, sidebar open state, `ui.dockLayout`, `hotkeys.globalShortcuts`, unknown and plugin entries |
+| root `theme-presets.json`                           | user theme presets, see [theming](theming.md)                                                                                                                          |
+| root `shortcut-recency.json`                        | which vault had focus last, for global shortcuts                                                                                                                       |
+| root `plugins/catalog.json`, `plugin-settings.json` | installed packages and device (`D`) plugin settings, see [plugin host internals](plugin-host.md)                                                                       |
+| vault database                                      | notes and vault (`V`) plugin settings                                                                                                                                  |
 
-`hotkeys.globalShortcuts` is a vault boolean, defaulting to false. It determines
-eligibility for system-wide actions; it does not move the shared key bindings
-into the vault. A root `global-shortcuts-migration.json` intent pins the former
-root value to the recorded legacy owner, or the selected migration vault when
-no owner exists. Existing vault choices win. A vault `.global-shortcuts-migrated`
-receipt is published after its settings and before removing the root source.
-Retries and recovered old root copies cannot re-enable a cleared owner or seed
-another vault. Unscoped browser values follow that same owner; explicit vault
-buckets preserve their own choice. Invalid booleans or migration records stop
-initialization with evidence intact. The worker storage contract is version 4;
-incompatible live workers block adoption and shared-document migration.
+Each versioned document has a revision, a validated `.previous` copy and a
+`.migrated` record. Settings operations patch one field after rereading the
+document under the root lock; they never save a whole frontend cache. The
+caller's expected vault ID must match the running worker. Cross-worker
+invalidations make each worker reload its own documents, and because a recovery
+can lower the revision, caches accept a refreshed snapshot even when its
+revision is older.
 
-The coordinator records vault focus in root `shortcut-recency.json`, separately
-from overall last-used startup selection. Entries bind vault IDs to canonical
-directories and include closed vaults. Live focus history wins while disk writes
-are pending; persisted history survives coordinator restart. Selection reads
-vault eligibility under RootLock without repairing a vault document. Disabled
-vaults and pending deletions are excluded. A pending legacy owner can remain the
-sole closed capture destination until its worker completes migration. With no
-eligible usage history, the eligible startup preference wins, then index order.
-This identifies a destination and does not itself authorize note creation.
+### Migrations into this layout
 
-Startup recovers a damaged recency document from a validated previous copy.
-Unrecoverable history makes shortcut selection unavailable while retaining both
-copies; manual vault opening remains usable. Runtime reads never overwrite
-corrupt vault settings or silently choose another destination. Dispatch pins the selected physical directory, waits for an authenticated ready
-worker, then rechecks eligibility, index membership, current binding and service
-admission. Failure never silently chooses a different destination.
+Values used to live in browser storage and, for some fields, in the other
+document. Every migration follows the same rules:
 
-The root coordinator owns system-wide registrations. Defaults and supported
-keys come from `src/lib/hotkeys/global-shortcuts.json`, also consumed by the
-frontend. Root bindings are read under RootLock; OS calls and worker IPC happen
-after releasing it. Readiness, eligibility edits, device edits and vault deletion
-invalidate registrations. Unchanged bindings remain registered. Failed removals
-stay tracked; callbacks must still match the current canonical binding. Failed
-registrations/removals and the latest failed action appear in shortcut settings.
-Workers never unregister a peer's bindings when their window closes.
+- Existing values win. A migration only fills what is absent.
+- Sources are kept: browser buckets keep their bytes, and former vault fields
+  stay in `content-settings.json` as evidence but never override root values.
+- When an old value had no vault, one owner is pinned before concurrent startup
+  (`appearance-migration-owner.json`, `global-shortcuts-migration.json`), and
+  only that vault, or the default vault, may inherit it.
+- A receipt (`.device-appearance-migrated`, `.global-shortcuts-migrated`,
+  `.ui-preferences-migrated`, `.dock-layout-migrated`) is published after the
+  destination is written and before the source is removed, so a retry or a
+  recovered old copy cannot reseed another vault or resurrect a reset value.
+- Malformed required inputs or invalid migration records stop initialization
+  with the evidence intact.
 
-Authenticated action requests use the same UUID through bounded socket retries.
-The root retains terminal operation results; the target worker retains action
-receipts for ten minutes, with a capacity of 1024. Reused IDs with changed inputs
-are rejected. DB success remains cached even when focus/notification delivery
-fails, so a lost response cannot create a second note. Frontend key dispatch
-queries current coordinator ownership before invoking the same local command;
-unknown or settling ownership suppresses local execution. Dev/test registration
-remains disabled. The runtime contract in `worker_registration.rs` is
-authoritative for protocol/storage versions; the shared shortcut manifest is
-included in its compatibility hash. Coordinator shortcut routing and whole-app
-shutdown pass Windows fixture checks. Packaged platform checks and menu/handoff
-release gates remain required before enabling supervision by default.
+The code is in `src-tauri/src/ui_settings.rs`.
 
-All document operations hold the root OS lock. Set/reset operations patch one
-field after rereading the document; they never save a whole frontend cache.
-The caller's expected vault ID must match the running worker. Frontend profile
-readiness waits for migration, and failed writes surface to callers. Focus and
-same-worker popout notifications refresh caches from disk. A recovery can reduce
-the revision, so caches accept that refreshed snapshot. Cross-worker invalidations reload each worker's own canonical documents.
-Supervised desktop startup and browser migration are implemented. Remaining
-release QA is tracked in the [platform checks](#concurrent-vault-platform-checks).
+## Global shortcuts
 
-Native sidebar widths use root fields `appearance.leftSidebarWidth` and
-`appearance.rightSidebarWidth`. Sorting, direction, and sidebar open/closed
-state use vault fields. The legacy unscoped preferences bucket seeds those vault
-fields only for the selected legacy vault; a root `.ui-preferences-migrated`
-record prevents later vaults from inheriting it. Existing fields win. Required
-malformed inputs or invalid records block initialization. The original browser
-bucket remains unchanged. A former root sort-strategy value moves to the
-selected vault before removing it from the root, retaining a previous copy.
-Recovery of that old root copy cannot reseed another vault's sorting preference.
-Native UI setters patch one field, refreshes update the live sidebar/sort state,
-and failed saves restore canonical values and show an error toast.
+The coordinator owns system-wide registrations. Defaults and supported keys
+come from `src/lib/hotkeys/global-shortcuts.json`, which the frontend reads too.
+A vault takes part only when its `hotkeys.globalShortcuts` is on (default off).
+Bindings are read under the root lock; OS calls and worker IPC happen after it
+is released. Workers never unregister a peer's bindings when their window
+closes. Failed registrations and the latest failed action show in shortcut
+settings. Development and test builds register nothing.
 
-Saved dock layouts now use vault field `ui.dockLayout`. Native initialization
-imports the matching encoded vault bucket; only the default vault can fall back
-to the historical unscoped layout. JSON shape/version, note ID and timestamp are
-validated before publishing either settings candidate. A vault
-`.dock-layout-migrated` record prevents reseeding, and explicit `null` preserves
-a cleared layout across restarts. Existing values win and source browser bytes
-remain intact. Layout writes require the running vault ID and report failures.
-The cache returns a copy so dockview cannot mutate the canonical snapshot.
-
-Release retains its historical data root and credential service. Dev uses the
-`.dev` bundle identity and a persistent separate root. Test roots and browser
-folders are explicit; all three real-app harnesses set both. Accounts remain
-vault-specific. Environment names do not permit two owners of one physical vault.
+The destination is the eligible vault that had focus most recently
+(`shortcut-recency.json`), then the startup preference, then index order.
+Dispatch pins that directory, waits for an authenticated ready worker, then
+rechecks eligibility and ownership. It never silently picks another vault, and
+an unrecoverable recency document disables shortcut selection rather than
+guessing. Action requests reuse one UUID across retries; the worker keeps
+receipts for ten minutes, up to 1,024, so a lost response cannot create a second
+note.
 
 ## Locks
 
@@ -134,9 +84,13 @@ normal and is reused. Never remove a lock file to take ownership; that can creat
 two locked file identities while a live owner still has the old handle. PIDs,
 heartbeats and file timestamps cannot authorize takeover.
 
-Local filesystems are supported. Network filesystem locking/durability is outside
-this plan. Older binaries without ownership locks remain unsafe against the same
-vault; new binaries cannot force them to cooperate.
+Only local filesystems are supported. Older binaries without ownership locks
+remain unsafe against the same vault; new binaries cannot force them to
+cooperate.
+
+Release, development (`.dev` bundle identity) and test builds use separate data
+roots and credential services. Test roots and browser folders are always
+explicit. Accounts are per vault.
 
 ## Write gate in the frontend
 
@@ -199,12 +153,7 @@ The recovery picker still needs an explicit salvage/import path for these orphan
 vaults. They must not be swept as temporary files. Lost indexes with multiple vault
 directories require that recovery path; no arbitrary vault is selected.
 
-A root desktop-settings migration marker prevents reseeding from a stale vault
-when both current and previous root files are missing. Valid root values win;
-vault sources and unknown fields are retained. Field patches reread current disk
-state under the lock and increment a revision, preserving concurrent edits.
-Recovery broadcasts must refresh caches even when a restored revision is older;
-revision numbers alone cannot represent recovery.
+Never delete SQLite WAL files as a startup cleanup operation.
 
 ## Deletion and dictionaries
 
@@ -213,7 +162,8 @@ root operation record and vault tombstone, removes the index entry, releases the
 in-directory ownership handle, then removes files. Windows requires that handle
 release. The root lock and tombstone block reopening during this sequence.
 Interrupted deletion resumes from its retained record. Invalid records and paths
-outside the canonical profiles directory are refused.
+outside the canonical profiles directory are refused. Deletion also tries to
+remove the vault's session key.
 
 A dictionary manifest selects one immutable validated `.aff`/`.dic` generation.
 Readers hold the dictionary lock while resolving/loading a pair. Publication is
@@ -223,118 +173,36 @@ interrupted cleanup cannot resurrect them. Caches refresh generations once per
 request. Old/unpublished generations are retained pending bounded cleanup.
 Malformed manifests or missing referenced files are preserved and refused.
 
-## Collaboration identities
-
-Live collaboration keeps no signing identity: the sync server admits a member
-to a room with a short-lived ticket. Legacy browser signing keys survive only in
-the encrypted legacy archive. Vault deletion attempts removal of the session key.
-Vault settings and plugin data have a
-[portable backup contract](backup-restore-portability.md). Credentials remain
-bound to the destination device/vault.
+## Closing windows and vaults
 
 Desktop close requests keep the webview alive until its editors and settings
-finish saving. The direct test runtime uses the same whole-vault close protocol
-as supervised workers. A popout close freezes and flushes that window alone,
-then destroys it after a successful acknowledgement. Failed or timed-out saves
-leave the popout open for retry. Its source tab returns only after destruction,
-so it cannot load stale content while the popout is still saving. Whole-vault
-close refuses to start while an independent popout close is pending.
+finish saving. A popout close flushes that window alone and destroys it only
+after a successful acknowledgement; a failed or timed-out save leaves it open
+for retry, and its source tab returns only after destruction. Whole-vault close
+refuses to start while a popout close is pending.
 
-Private worker close commands retain request IDs and expose queued, pending,
-committing or failed status. Repeated IDs never start another save attempt.
-Queued aliases attach before native dispatch, so cancellation cannot turn a
-late callback into an unintended retry. Cancelled outcomes remain queryable for
-ten minutes; unknown status reads do not allocate requests. An existing close
-can be observed through a new alias. Committing proves the save/drain decision,
-not process exit or ownership release. Coordinators must still observe actual
-child exit or acquire the physical vault's OS lease before considering it closed.
-Whole-app Quit uses this protocol and observes physical ownership release before
-exiting the coordinator. Cancellation, save failure, unknown owners or timeout
-leave the remaining workers usable. Durable handoff uses the same close receipts
-and physical ownership checks.
+Close commands carry request IDs, and a repeated ID never starts another save.
+"Committing" proves the save decision, not that the process exited: the
+coordinator must still see the child exit or take the vault's OS lock before it
+treats the vault as closed. Quit, vault handoff and update installation all go
+through this protocol. Cancellation, a failed save, an unknown owner or a
+timeout leave the remaining workers usable, and a failed status read never
+implies closure.
 
-Desktop menu observations distinguish ready, starting and unavailable owners.
-Failed reads cannot imply closure or authorize deletion/restart switching. The
-supervised opening command binds to the exact ready source launch and rechecks
-the target's index/physical ownership. Source admission tracks the opening job;
-the coordinator rejects new opening requests during Quit/update drain. Opening
-another vault leaves the source running; requesting an existing target focuses
-its window. This-window handoff and remembered opening preferences are implemented.
-Interrupted handoff finishes opening the target once the source has saved and
-closed, and retains the source while it is open.
-
-The coordinator also owns tray, shortcut and autostart registration and update
-installation. Update recovery records every open vault and main/popout window
-before close, restores visibility/geometry/focus, and consumes the record only
-after persistence readiness. A consumed record is retained without replay on a
-normal cold launch. Coordinator revival adopts surviving physical owners without
-opening another vault or activating a window. These paths pass embedded Windows
-checks. Optimized Linux Debian installation and a locally signed AppImage update
-also pass, including rejected signatures, both vaults, popouts, hidden state and
-consumed restart behavior. Packaged macOS and production-key platform checks
-remain open. See [the VM report](e2e/ubuntu-vm-qa.md).
-
-## Verification limits
-
-Windows tests cover killed owners, leftover lock files, interrupted restore and
-delete boundaries, concurrent root field/index edits, validated previous-copy
-recovery, and concurrent dictionary readers/publishers. Native app tests confirmed
-duplicate rejection and reopening after forced termination. File contents and
-Unix directory entries are flushed before publication. Windows directory-entry
-reboot durability and packaged platform behavior remain release QA. Linux X11
-and nested Wayland handoff/recovery/startup checks pass; see the harness guide.
-The Ubuntu Proxmox guest hard-reset run retained the last externally acknowledged
-settings revision and recovered both handoff and three restore checkpoints.
-Repeated cold starts released all leases. Physical host power loss and Windows
-directory-entry durability remain outside that result; see the VM report.
-Never delete SQLite WAL files as a startup cleanup operation.
-
-Global plugin packages use root `plugins/catalog.json`, immutable
-`plugin-packages/<digest>` directories and OS leases in `plugin-leases`.
-Installation generations bind approvals to a particular installation. Removal
-publishes a revocation before a catalog tombstone, so recovery cannot restore its
-authority. Reinstall needs fresh approval even in unopened vaults. Existing scripts
-and preview services retain their old package lease; final release collects retired
-files and unreferenced digest-addressed artifacts. Writable `plugin-data` stays in
-the vault. Settings and migration sources survive removal.
-
-Root `plugin-settings.json` records the startup-selected canonical vault directory
-and one-time `D` key receipts. Existing root values win. Retained vault rows cannot
-resurrect a reset value. RootLock guards field edits and catalog publication;
-notifications are sent after its release. See the
-[plugin host internals](plugin-host.md).
-
-Portable backup format 2 carries vault settings and writable plugin data along
-with immutable package files and portable device values. Restore replaces the
-selected vault; shared settings/themes/packages import only when selected, and
-existing device entries win. Imported third-party execution approval is cleared.
-Version 2 restore journals validate database/resource hashes, preserve old vault
-files and resume before opening the database. The worker storage contract is 4.
-See [backup recovery and retained evidence](backup-restore-portability.md#validation-and-recovery).
+Update recovery records every open vault and window before closing them and
+restores visibility, geometry and focus afterwards. Coordinator revival adopts
+surviving workers without opening another vault or activating a window.
 
 ## Concurrent vault platform checks
 
-Ordinary desktop launches use the coordinator and isolated vault workers.
-Root/vault settings, browser isolation, live ownership, remembered opening
-choices, handoff, shortcuts, tray, autostart, Quit and update recovery are
-implemented. Isolated test devices and mobile retain their single-vault flows.
-Handoff may replace the native window while preserving its content and geometry.
-
-Global plugin packages, theme presets and settings/plugin-data backup portability
-are implemented. Credentials and downloaded caches stay device-local. Current
-contracts are in this document, [plugin host internals](plugin-host.md),
-[theming](theming.md) and [backup portability](backup-restore-portability.md).
-
-Linux compositor behavior and geometry constraints are recorded in
-[the harness guide](e2e/harness.md#concurrent-vault-checks). The
-[Ubuntu VM report](e2e/ubuntu-vm-qa.md) records passing Linux guest hard-reset
-checks on ext4, packaged installation and updater restart using a disposable QA
-signing key, real backup pickers and integer 200% scaling.
+Linux compositor behaviour and geometry constraints are recorded in
+[the harness guide](e2e/harness.md#concurrent-vault-checks), and the Linux
+results in [Ubuntu VM QA](e2e/ubuntu-vm-qa.md).
 
 Remaining release QA:
 
 - Windows directory-entry and physical host power-loss durability.
 - Production-key updater installation and packaged restart on Windows/macOS.
-- Real monitor, DPI and display-change behavior.
-- Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behavior.
+- Real monitor, DPI and display-change behaviour.
+- Packaged macOS 14+ Dock/menu/Reopen, focus, hide/show and Cmd+Q behaviour.
   The owner accepted deferral until a Mac is available for release testing.
