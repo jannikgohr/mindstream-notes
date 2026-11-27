@@ -1244,7 +1244,7 @@
     "theme.preset.warm": "Warm",
     "theme.preset.forest": "Forest",
     "theme.missingOption": "Missing preset: {id}",
-    "theme.missing": "This preset is unavailable. Apollo is displayed while your selection is retained.",
+    "theme.missing": "This preset is unavailable. Slate & Indigo is displayed while your selection is retained.",
     "theme.editJson": "Show preset JSON",
     "theme.remove": "Remove preset",
     "theme.import": "Import or edit a preset",
