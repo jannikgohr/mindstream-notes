@@ -212,9 +212,13 @@ export function zoom(page, selector) {
   }, selector);
 }
 
-/** Resolves once `proc` and, on Linux, everything it started have exited. */
+/**
+ * Resolves once `proc` and, on Linux and Windows, everything it started
+ * have exited: a WebView2 or Chromium process left behind holds the profile
+ * the next start wants.
+ */
 async function exited(proc) {
-  if (process.platform !== 'linux') {
+  if (process.platform !== 'linux' && process.platform !== 'win32') {
     if (proc.exitCode === null && proc.signalCode === null)
       await new Promise((r) => proc.once('exit', r));
     return;
@@ -224,7 +228,10 @@ async function exited(proc) {
     pids.filter((p) => {
       try {
         process.kill(p, 0);
-        return !readFileSync(`/proc/${p}/stat`, 'utf8').includes(') Z ');
+        return (
+          process.platform === 'win32' ||
+          !readFileSync(`/proc/${p}/stat`, 'utf8').includes(') Z ')
+        );
       } catch {
         return false;
       }
@@ -245,9 +252,11 @@ async function exited(proc) {
 }
 
 /**
- * Starts a Chromium-based app (Chromium itself or an Electron app) with the
- * DevTools protocol on `port`, and resolves with the first window for which
- * `pick` returns true. `t0` is taken before the process starts, so it times
+ * Starts a Chromium-based app (Chromium itself, an Electron app, or a
+ * WebView2 host) with the DevTools protocol on `port`, and resolves with the
+ * first window for which `pick` returns true. A WebView2 host takes the
+ * port through its environment, so `portFlag: false` leaves the flags out.
+ * `quit` replaces the default way of closing the app. `t0` is taken before the process starts, so it times
  * a cold start the way a user sees one.
  *
  * `close` asks Chromium to quit over the protocol when `cdpClose` is set,
@@ -259,12 +268,22 @@ async function exited(proc) {
 export async function launch(
   bin,
   args,
-  { env = {}, port, pick = async () => true, cdpClose = false }
+  {
+    env = {},
+    port,
+    pick = async () => true,
+    cdpClose = false,
+    portFlag = true,
+    quit
+  }
 ) {
   const t0 = performance.now();
   const proc = spawn(
     bin,
-    ['--no-sandbox', `--remote-debugging-port=${port}`, ...args],
+    [
+      ...(portFlag ? ['--no-sandbox', `--remote-debugging-port=${port}`] : []),
+      ...args
+    ],
     {
       env: { ...process.env, LC_ALL: 'C.UTF-8', ...env },
       stdio: ['ignore', 'ignore', 'pipe']
@@ -309,7 +328,10 @@ export async function launch(
     page,
     t0,
     async close() {
-      if (cdpClose)
+      if (quit) {
+        await quit(page).catch(() => {});
+        await browser.close().catch(() => {});
+      } else if (cdpClose)
         // The reply may never come: the socket closes first.
         browser
           .newBrowserCDPSession()

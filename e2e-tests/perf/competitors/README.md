@@ -7,9 +7,13 @@ manual tools for Linux (under Xvfb) and Windows, and stay out of CI. Results
 from a run are in [docs/internal/benchmarks](../../../docs/internal/benchmarks/).
 
 ```sh
-# Mindstream, with results next to the others
-pnpm bench:vault --json .output/bench/competitors/mindstream-20000.json
-pnpm bench:vault --small --skip-build --json .output/bench/competitors/mindstream-small.json
+# Mindstream's browser build, with results next to the others
+pnpm bench:vault --json .output/bench/competitors/mindstream-web-20000.json
+pnpm bench:vault --small --skip-build --json .output/bench/competitors/mindstream-web-small.json
+
+# Mindstream's desktop app (Windows only), after a test-instance release build
+node src-tauri/scripts/tauri.mjs build --no-bundle --features e2e-data-dir
+pnpm bench:vault --native --json .output/bench/competitors/mindstream-native-20000.json
 
 # Each competitor: --small for the 28-note vault, --articles N for Wikipedia
 xvfb-run -a -s "-screen 0 1920x1080x24" node e2e-tests/perf/competitors/obsidian.mjs
@@ -44,7 +48,11 @@ Joplin's note list classes, Logseq's search dialog) can break on an update.
 
 - Every app starts as its own process with the DevTools protocol on, and a
   cold start is timed from spawning the process, median of `--runs` (3).
-  Mindstream runs its browser build in Playwright's Chromium.
+  Mindstream's browser build runs in Playwright's Chromium, storing notes in
+  OPFS through WebAssembly. The desktop app (`--native`) is what users
+  install: WebView2 and native SQLite. It runs as a test instance with its
+  own data and WebView2 folders; the window is sized like the others through
+  the DevTools protocol.
 - Steps are timed by polling the page every 50 ms. Memory is summed over the
   app's process tree: PSS on Linux, so Chromium's and Electron's many
   processes count shared pages once; on Windows the private working set
