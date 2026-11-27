@@ -4,7 +4,8 @@
 
 Status: local workaround implemented. Upstream issue and PR still to file.
 
-Affected dependency: `@milkdown/crepe` 7.22.1.
+Affected dependency: `@milkdown/crepe` 7.22.1. The toolbar in 7.23.0 still
+has no pointer or drag handling.
 
 To reproduce, drag a text selection from a lower paragraph toward an earlier
 paragraph. Pause briefly with the mouse button held, then move upward through

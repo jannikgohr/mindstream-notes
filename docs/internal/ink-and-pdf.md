@@ -27,8 +27,9 @@ deleted pages in `ink:deletedPages` and the schema version in `ink:meta`.
 
 ## PDF backgrounds
 
-PDF.js runs only when pages are imported or an older PDF-backed note is
-upgraded. [`page-images.ts`](../../src/lib/ink/page-images.ts) saves each page as
+In the shared handwriting editor, PDF.js runs only when pages are imported or
+an older PDF-backed note is upgraded. The PDF note's own reader still renders
+with PDF.js. [`page-images.ts`](../../src/lib/ink/page-images.ts) saves each page as
 a JPEG at 216 dpi, capped at 6 million pixels and 4,096 pixels on the longest
 edge, at quality 0.9, plus a preview of at most 256 pixels at quality 0.8.
 Opening, scrolling, thumbnails, search and export use these images and never

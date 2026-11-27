@@ -8,16 +8,13 @@ For everything else:
 
 - **Environment setup** (per-OS prerequisites, builds): [docs/BUILDING.md](docs/BUILDING.md)
 - **How the app fits together:** [docs/internal/architecture.md](docs/internal/architecture.md)
-- **Design notes, test docs and audits:** [docs/internal/](docs/internal/README.md)
+- **Design notes, test docs and security notes:** [docs/internal/](docs/internal/README.md)
 - **Running the tests:** [e2e-tests/README.md](e2e-tests/README.md)
 
 ## Getting started
 
-```sh
-pnpm install        # also installs the husky git hooks
-pnpm dev            # browser UI (mock store, no Rust)
-pnpm tauri-dev      # the real desktop app
-```
+The commands to install and run the app are in the README's
+[Development](README.md#development) section.
 
 ## Branches
 
@@ -62,11 +59,11 @@ The commit body has no line-length limit, so wrap it however reads best.
 `pnpm install` sets up husky, so these run on their own. If one fails it blocks
 the commit or push; fix the underlying issue rather than skipping the hook.
 
-| Hook           | What it runs                                                                          |
-| -------------- | ------------------------------------------------------------------------------------- |
-| **pre-commit** | `lint-staged` (prettier `--check` on staged web/docs files), then `format:rust:check` |
-| **commit-msg** | `commitlint` (the rules above)                                                        |
-| **pre-push**   | `pnpm verify` (`check`, `test`, `build`) and `pnpm verify:rust` (`cargo test`)        |
+| Hook           | What it runs                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **pre-commit** | `lint-staged` (prettier `--check` on staged web/docs files, and the theme lint on staged `src/` files), then `format:rust:check` |
+| **commit-msg** | `commitlint` (the rules above)                                                                                                   |
+| **pre-push**   | `pnpm check` and `pnpm test`                                                                                                     |
 
 One thing to know about the pre-commit step: prettier runs in check mode, not
 write mode, so it complains about unformatted files instead of fixing them for
@@ -91,6 +88,7 @@ about:
 pnpm check          # svelte-check (types + Svelte diagnostics)
 pnpm test           # vitest (frontend unit)
 cd src-tauri && cargo test   # Rust unit
+cd src-tauri && cargo clippy -- -D warnings   # Rust lints, as CI runs them
 cd backend/server && cargo test   # sync server, needs Postgres (see its README)
 ```
 
@@ -113,18 +111,12 @@ pnpm test:coverage:rust     # desktop Rust, enforces 80%
 pnpm test:coverage:server   # sync server, enforces the floor in its script
 ```
 
-One Rust test asks a question the rest of the suite can't: whether the wire
-format the LanguageTool plugin's manifest describes is still the one the
-service speaks. It needs a real server, so it is `#[ignore]`d and runs only
-when you ask for it by name. It is never required:
+An optional, ignored test checks the LanguageTool wire format against a real
+server; its file header says how to run it:
 
 ```sh
 MINDSTREAM_LT_ENDPOINT=http://localhost:8010 cargo test --test languagetool_contract -- --ignored --nocapture
 ```
-
-Point it at whatever instance you already run. Everything else about the
-checker is tested against an in-process stub — the app's own behaviour is what
-those tests are about, and only a stub can assert what it received.
 
 ## Licences
 
@@ -156,12 +148,7 @@ first is not decided yet. See
 
 ## CI
 
-Every push to `main` and every pull request runs
-[`.github/workflows/test.yml`](.github/workflows/test.yml): the `js` and `rust`
-unit tests (on Linux, Windows, and macOS), `coverage`, `server` (the sync
-server's tests under coverage, when the server changes), `e2e` (the Playwright
-browser-fallback suite), and `format` (prettier in check mode). The `app-e2e`
-Linux matrix runs the single-client and both multiremote Tauri suites under
-Xvfb, with a disposable collaboration backend for T4. Coverage thresholds fail
-CI even when Codecov uploads are unavailable. See
-[docs/internal/e2e/status.md](docs/internal/e2e/status.md).
+[`.github/workflows/test.yml`](.github/workflows/test.yml) runs on every push to
+`main` and every pull request; its header comment lists the jobs and when each
+one runs. What the end-to-end suites cover is in
+[docs/internal/e2e/flows.md](docs/internal/e2e/flows.md).

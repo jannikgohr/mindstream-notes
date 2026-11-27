@@ -4,17 +4,6 @@ All colour, elevation and radius in the app comes from tokens defined in
 [`src/app.css`](../../src/app.css). This document is the contract for that file:
 what each token means, which one to reach for, and what is not allowed.
 
-## Why the system exists
-
-The app previously had tokens but no system. `--muted` was _darker_ than
-`--background` in light mode and _lighter_ in dark mode, so any component using
-it as a surface recessed in one theme and lifted in the other — most visibly the
-Kanban board, whose columns became pale slabs with darker cards floating on
-them. `--border`, `--muted`, `--accent` and `--secondary` were all the same
-value in dark mode, so bordered elements on a muted surface had no outline. Each
-area of the app worked around this locally, which is why the sidebars, the
-Kanban board and the dockview chrome each ended up with their own look.
-
 ## The two layers
 
 **Layer 1 — the system.** The elevation scale, border tiers, brand accent and
@@ -38,14 +27,14 @@ _lower_ index than its parent; one that lifts takes a _higher_ one. This holds
 identically in light and dark, so a layout designed in one theme is correct in
 the other.
 
-| Token         | Use for                                                                                     | Light `L` | Dark `L` |
-| ------------- | ------------------------------------------------------------------------------------------- | --------- | -------- |
-| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             | 0.975     | 0.220    |
-| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) | 0.985     | 0.245    |
-| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     | 0.992     | 0.270    |
-| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        | 1.000     | 0.295    |
+| Token         | Use for                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| `--surface-0` | window chrome behind everything — title bar, dock strip, mobile top/bottom bars             |
+| `--surface-1` | panels — sidebars, editor panel, board background (this is what `--background` resolves to) |
+| `--surface-2` | containers on a panel — Kanban columns, sidebar sections, grouped wells                     |
+| `--surface-3` | items and overlays — cards, popovers, dialogs, menus                                        |
 
-Utilities: `bg-surface-0` … `bg-surface-3`.
+Utilities: `bg-surface-0` … `bg-surface-3`. The values are in `app.css`.
 
 Light mode starts at a real grey rather than near-white so all four steps fit
 below pure white. Its steps compress as they approach white, so shadow carries
@@ -145,7 +134,7 @@ alias, so there is exactly one word for the concept.
 Presets do not carry status colours, so one set serves every preset. They come
 from Apollo's green, teal and red, with a yellower amber for `--warning` so it
 stays apart from Apollo's ochre accent. Each base colour is checked as text
-against every built-in preset's surfaces (at least 4.6:1).
+against every built-in preset's surfaces (at least 4.5:1).
 
 Each has three companions:
 
@@ -191,8 +180,9 @@ absence of a token:
 - `--scrim`, the wash behind a modal. Always black, because a scrim's job is
   to darken what is behind it; only its strength is theme-dependent.
 
-- `--highlight-search` / `-active` / `-selection`, shared by the editor's
-  find decorations and the PDF viewer's overlay.
+- `--highlight-search`, `--highlight-search-active` (with `-outline`) and
+  `--highlight-selection`, shared by the editor's find decorations and the PDF
+  viewer's overlay.
 - Ink pen swatches and PDF annotation colours
   ([`src/lib/ink/editor-helpers.ts`](../../src/lib/ink/editor-helpers.ts),
   [`src/lib/pdf/viewer-helpers.ts`](../../src/lib/pdf/viewer-helpers.ts)). They
@@ -243,17 +233,8 @@ and `surface-1` in dark mode; the active document tab shares that surface.
 Use `bg-editor-surface` when a desktop document surface needs a utility class.
 The toolbar and right sidebar header align with the 42px document tab strip.
 
-## Migration status
-
-Everything is on the token system: both sidebars, the desktop and mobile shell
-chrome, the Kanban board, the dockview chrome, the Milkdown/Crepe editor, and
-every status colour. There are no raw Tailwind palette utilities left in
-`src/` — no `bg-emerald-500`, no `text-amber-700`, no `dark:` colour variants.
-
-Known remaining work:
+## Remaining work
 
 - **Dialogs and sheets** — the dialog body is `surface-3` (correct, it floats)
   but its header bars are `bg-card` too, so they are flat against it. They want
   `Surface variant="overlay"` for the shell and a lower step for the header.
-  Guardrails are in place: `pnpm lint:theme` fails the commit if a raw palette
-  utility, a `dark:` colour variant, or a colour literal reappears.

@@ -50,13 +50,6 @@ for. That rule lives in one table, `CONTRIBUTION_POINTS` in
 `src/lib/plugins/types.ts`, read by both the validator and the contribution
 registry, so what is checked and what is enforced cannot drift apart.
 
-The permission list used to be longer. It carried _contribution gates_
-(`templates.contribute`, `noteKinds.contribute`, `noteExporters.contribute`),
-which only restated what `contributes` already said and gated nothing at
-runtime, and `pluginWebviews.allowEval`, which is a CSP setting on one
-contribution rather than a resource anyone can reach. Those are gone;
-`webview.allowEval` is now just the manifest flag it always was.
-
 Same-signer updates keep their approval only when they request no added
 permissions (`widens` in `src-tauri/src/plugins/mod.rs`). Every command that runs
 plugin code re-reads the plugin from disk and compares its digest to the
@@ -93,10 +86,11 @@ fields (`activeNoteId`, `locale`) come from the frontend.
 
 **Reserved namespaces.** The ABI reserves future `mindstream:ai` and
 `mindstream:ocr` capability namespaces for models the host itself would run.
-They are design boundaries only. Handwriting recognition does not use them: it
-is a plugin that sends rendered pages to a model server the user picks,
-through the note events, jobs and ink APIs in the
+They are design boundaries only. Handwriting recognition, which is planned,
+will not use them: it is to be a plugin that sends rendered pages to a model
+server the user picks, through the note events, jobs and ink APIs in the
 [host API design](plugin-host-api-design.md#note-events-jobs-and-ink-pages).
+None of those exist yet.
 
 **Why the host makes text-checker requests.** Besides keeping note text away
 from plugin code, it is the only way the request works at all. A self-hosted
@@ -139,9 +133,10 @@ itself in the app through its manifest's `descriptionKey` and `documentation`.
   tag and returns a menu of `createNoteFromNote` effects. `renderTemplate`
   expands the selected note's title and body. The macro engine belongs to the
   plugin; the app validates and performs the write.
-- **Typst** (`com.mindstream.typst`) renders and exports through the declared
-  native `typst` tool. Its settings, source language, toolbar items and the
-  `tinymist` preview service are declarative.
+- **Typst** (`com.mindstream.typst`) is a compiled Rust component that renders
+  and exports by running the user's `typst` binary through `native-tools`. Its
+  settings, source language, editor toolbar buttons and the `tinymist` preview
+  service are declarative.
 - **Graph** (`com.mindstream.graph`) is a compiled Rust component with a
   sidebar view and a tab view. It names the notes and tags to draw, their
   colour groups and the note-to-tag links; the host adds the links between
@@ -156,13 +151,9 @@ itself in the app through its manifest's `descriptionKey` and `documentation`.
 Rebuild the committed components with `pnpm plugins:build`, using the pinned
 Rust toolchain and Node 22.11 or later. Core components contain no QuickJS
 runtime, and the app needs no Node or Rust guest compiler at runtime.
-
-## Testing
-
-Run `npm run test:plugin-author` in the repository to check the packed SDK in
-an isolated directory without Cargo or rustc. `pnpm test` includes the SDK and
-core-component behaviour tests. `pnpm plugins:build` rebuilds the core
-components' bytes.
+`pnpm test` includes the SDK and core-component behaviour tests;
+`pnpm test:plugin-author` checks the packed SDK in an isolated directory
+without Cargo or rustc.
 
 ## Maintaining the TypeScript SDK
 

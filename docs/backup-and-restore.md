@@ -16,7 +16,7 @@ opens one and either replaces the vault with it or merges the missing items in.
   them out.
 
 Some things never leave the device. That covers account sessions, the keys in
-the system keystore, signing private keys, window positions and the list of
+the system keystore, window positions and the list of
 vaults. Approvals you gave third-party plugins to run stay behind as well.
 Downloaded plugin artifacts and dictionaries are caches, and the app downloads
 them again on the new device.
@@ -36,11 +36,10 @@ much plugin data and how many plugin packages the backup brings.
 ### Restore this vault
 
 Restore replaces the vault's notes, settings and plugin data with the backup's.
-The app restarts to swap the backup in, and keeps the current data as a
-timestamped pre-restore copy in the data folder. The database copy is
-named `mindstream-pre-restore-<time>-<id>.db`, and the vault's files go to
-`backups/pre-restore-files-<hash>/`. The app never deletes these copies.
-You can delete them once the restored vault looks right.
+The app restarts to swap the backup in, and keeps a dated copy of the current
+data in the data folder, which **Open data folder** under **Settings → Data &
+Backup** shows. The app never deletes these copies. You can delete them once
+the restored vault looks right.
 
 You stay signed in on this device. A backup from the account you are signed in
 with keeps its sync state. A backup from another account, or from a vault with

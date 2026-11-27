@@ -10,7 +10,7 @@ survive.
 | ------------------------------ | -------------- | ----------------------------------------- |
 | Markdown folder (GFM)          | a folder       | fallback for any folder                   |
 | Obsidian vault                 | a folder       | a `.obsidian/` directory                  |
-| Joplin RAW export              | a folder       | items ending in a `type_:` metadata block |
+| Joplin RAW export              | a folder       | Joplin's metadata at the end of each item |
 | Joplin `.jex`                  | a file         | the `.jex` extension                      |
 | Joplin Markdown + Front Matter | a folder       | a `_resources/` directory                 |
 | Evernote                       | a `.enex` file | the `.enex` extension                     |
@@ -26,17 +26,17 @@ is appended. Undoing an import means trashing one folder.
 
 ### What maps to what
 
-| Source                                                                     | Becomes                                               |
-| -------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Directory / Joplin notebook                                                | Folder                                                |
-| `.md` file / Joplin note / Evernote note                                   | Markdown note                                         |
-| Frontmatter `title`, or a leading `# Heading`                              | Note title (file name otherwise)                      |
-| Frontmatter `tags`, Obsidian inline `#tags`, Joplin tags, Evernote `<tag>` | Tags                                                  |
-| Frontmatter `created` / `modified`, Joplin and Evernote timestamps         | Note timestamps (the file's mtime as a fallback)      |
-| Images and other linked files                                              | Attachments (see below)                               |
-| Evernote ENML                                                              | Markdown, via [`htmd`](https://crates.io/crates/htmd) |
-| Evernote `<en-todo>`                                                       | `- [ ]` / `- [x]`                                     |
-| Evernote `<en-crypt>`                                                      | A placeholder saying the content was not imported     |
+| Source                                                                     | Becomes                                           |
+| -------------------------------------------------------------------------- | ------------------------------------------------- |
+| Directory / Joplin notebook                                                | Folder                                            |
+| `.md` file / Joplin note / Evernote note                                   | Markdown note                                     |
+| Frontmatter `title`, or a leading `# Heading`                              | Note title (file name otherwise)                  |
+| Frontmatter `tags`, Obsidian inline `#tags`, Joplin tags, Evernote `<tag>` | Tags                                              |
+| Frontmatter `created` / `modified`, Joplin and Evernote timestamps         | Note timestamps (the file's mtime as a fallback)  |
+| Images and other linked files                                              | Attachments (see below)                           |
+| Evernote note formatting                                                   | Markdown                                          |
+| Evernote `<en-todo>`                                                       | `- [ ]` / `- [x]`                                 |
+| Evernote `<en-crypt>`                                                      | A placeholder saying the content was not imported |
 
 ## Links
 
@@ -95,23 +95,12 @@ there would hand it to them.
 
 ## Running a large import
 
-The importer handles vaults of around a million notes. It works in the
-background and shows its progress, and you can keep using the app meanwhile.
-Stopping an import keeps every note it has already written.
-
-When the import finishes, the file tree reloads. At a million notes that
-reload, not the import, is the slow part.
+The importer handles vaults of around a million notes and shows its progress
+while it runs. An import lands all at once: until it finishes you can read
+your notes, but saving, syncing and other changes wait for it. If you stop it,
+nothing is imported. When it finishes, the file tree reloads.
 
 ## Known limitations
 
-See [Known limitations](known-limitations.md#import) for the full list. In
-short:
-
-- Most Evernote exports do not include note guids, so links between Evernote
-  notes are matched by the link text, which Evernote sets to the target's
-  title. Two notes with the same title can be confused.
-- Obsidian `![[Note]]` embeds become ordinary links. Mindstream cannot display
-  one note inside another.
-- Obsidian Canvas and Excalidraw files are not imported as drawing canvases.
-- Duplicate attachments that were already in the vault before content-based
-  storage was added are not merged.
+Links between Evernote notes, Obsidian embeds and canvases, and older duplicate
+attachments have limits. See [Known limitations](known-limitations.md#import).

@@ -12,18 +12,20 @@ security risks we accepted see [security-review.md](security-review.md).
 - **CRDT note bodies.** Every note body is a Yjs/yrs document, so concurrent
   edits (across devices, or live between peers) merge instead of clobbering.
 - **Optional end-to-end-encrypted sync.** When signed in, the server only ever
-  stores ciphertext — for at-rest sync (Etebase) and for live collaboration (a
-  dumb relay that sees only AES-GCM frames).
-- **Two run modes from one codebase.** Inside Tauri the UI calls real Rust
-  commands; outside Tauri (`pnpm dev`, Playwright) the same calls fall back to an
-  in-memory mock store, so the whole UI runs in a plain browser.
+  stores ciphertext, both at rest and in live rooms. It knows who is in a room
+  and who may write, but not what they write.
+- **One storage core, two hosts.** The same Rust storage code runs natively
+  inside Tauri and, compiled to Wasm, in a browser worker on SQLite over OPFS.
 
 ## Repository layout
 
 ```text
 src/                    Svelte app: UI components, stores, editors, API bridge
   lib/onboarding/demo-notes/  Welcome Markdown bundled with setup
-src-tauri/              Tauri app and Rust backend: persistence, sync, commands
+src-tauri/              Tauri app: commands, sync, sharing, vault runtime
+  storage-core/         Notes, assets, history, search, import, migrations
+  browser-wasm/         Storage core compiled for the browser worker
+  plugin-runtime/       The Wasm plugin host
 backend/server/         The sync server (AGPL-3.0), see server-design.md
 backend/scripts/        Driver for the disposable server the e2e suites use
 plugins/                Plugins bundled with the app, with their built .wasm
@@ -45,13 +47,14 @@ flowchart TB
     end
 
     Bridge["API bridge — src/lib/api · invokeOrFallback()"]
-    Mock["Mock store (in-memory)"]
+    Wasm["Browser vault (storage-core in a worker)"]
+    Mock["Mock store (tests only)"]
 
-    subgraph BE["Rust backend — src-tauri/src"]
-        Rust["Tauri commands · SQLite · Etebase sync · keyring"]
+    subgraph BE["Rust backend — src-tauri"]
+        Rust["Tauri commands · storage-core · sync · keyring"]
     end
 
-    DB[("mindstream.db (per profile)")]
+    DB[("mindstream.db (per vault)")]
 
     subgraph SRV["mindstream-server (self-hosted, one URL)"]
         API["Accounts · encrypted storage · sharing"]
@@ -63,60 +66,33 @@ flowchart TB
 
     UI --> Bridge
     Bridge -->|inside Tauri| Rust
-    Bridge -->|browser fallback| Mock
+    Bridge -->|browser| Wasm
+    Bridge -.->|"VITE_BROWSER_MOCKS=1"| Mock
     Rust --> DB
-    Rust -->|"Etebase sync (at rest, E2EE)"| NGINX
-    CP -->|"live updates (E2EE)"| NGINX
+    Rust -->|"sync (at rest, E2EE)"| API
+    CP -->|"live updates (E2EE)"| Rooms
 ```
 
 ## Desktop vault runtime
 
 An ordinary desktop launch elects one coordinator for its environment root.
 The coordinator owns the vault index, desktop integrations and root recovery.
-Each vault has one worker with a physical lifetime OS lease, its own SQLite
-connection, settings/account state and isolated browser store. Main and note
-popout windows share that worker. Authenticated private IPC pins launch identity
-and protocol compatibility; failed IPC never proves a released vault lease.
-Isolated e2e devices remain direct unless explicitly supervised, and mobile
-retains its existing single-vault runtime.
+Each open vault has its own worker process, holding an OS lock on the vault,
+its own SQLite connection and settings, and its own browser store. Main and
+note popout windows share that worker. Mobile and isolated e2e devices run a
+single vault directly; pass `--supervised-vaults` to test several vaults in one
+root.
 
-Device settings live in locked root documents; content settings live in the
-vault. Revision notifications carry invalidations, and each worker reloads its
-own values. Before concurrency, a dedicated legacy-origin page exports browser
-storage into an encrypted archive with preserved original values. A missing
-startup directory opens an isolated picker before editor services initialize.
+Switching vaults in one window saves and closes the source worker before the
+target is shown, through a durable `vault-handoff.json` record that startup can
+resume. A record that is corrupt or names another root, vault or build is set
+aside as `<name>.unresumable-<uuid>`, so recovery never blocks startup. A main
+window hidden to the tray for 15 minutes with no popout open is destroyed while
+its worker keeps syncing (see [memory.md](memory.md)). Once its last worker
+exits the coordinator exits too, unless close-to-tray is on.
 
-Opening in this window prepares a hidden target, then saves and closes the
-source worker before showing the target. The durable `vault-handoff.json` record
-binds exact vault paths, launch/operation IDs, geometry and phase. Recovery keeps
-a still-open source; after source closure it finishes the target. Whole-app Quit
-and updates save every participating window before releasing worker ownership.
-Close-to-tray, and closing on macOS, hide only the last open vault's main
-window. With another vault open, closing a main window closes its vault, since
-the tray can't reach a hidden window that isn't its last-focused vault.
-A main window hidden to the tray for 15 minutes, with no popout open, is saved
-the same way and destroyed while its worker keeps syncing; anything that asks
-for the window builds it again (see `memory.md`).
-Progress shares the bottom-right toast component and cannot be dismissed while
-native closure is deciding. Once its last worker has exited, the coordinator
-exits too unless close-to-tray is on. That setting alone decides, in `tauri dev`
-as in a release: a vault that enables global shortcuts does not keep a closed
-app in the tray, so capturing into a closed vault needs close-to-tray.
-
-Startup recovery never blocks opening vaults indefinitely. A handoff or update
-record that is corrupt or names another root, vault path or build is renamed to
-`<name>.unresumable-<uuid>` and startup continues. A resumable update session
-that fails to reopen is kept for one retry on the next launch, then set aside;
-a failing handoff gets three backed-off retries, then is set aside and its
-vault opened normally. Recovery as a whole is limited to five minutes. A worker
-whose window never becomes ready reports the failure and exits, releasing its
-vault, and a launch that finds an unresponsive coordinator tells the user
-instead of exiting silently.
-
-The coordinator also runs in `tauri dev`, and survives vault handoffs there.
-As in a release, closing the last vault window ends it, and with it the
-development session, unless close-to-tray is on. Test devices stay direct by
-default; pass `--supervised-vaults` when testing several vaults in one root.
+Locks, root documents, startup and deletion are in
+[storage ownership and recovery](storage-ownership-and-recovery.md).
 
 ## Frontend (`src/`)
 
@@ -126,104 +102,94 @@ Pointer Events, with an Android-only Kotlin `CanvasFrontBufferedRenderer`
 overlay for live-stroke latency; freeform embeds an Excalidraw island; PDFs
 render through pdf.js.
 
-- **API bridge — [`src/lib/api/`](../../src/lib/api).** One thin module per Rust
+- **API bridge — [`src/lib/api/`](../../src/lib/api).** One thin module per
   command surface (`notes.ts`, `collections.ts`, `sharing.ts`, …). Each call goes
-  through `invokeOrFallback(command, args, fallback)` in
-  [`api/core.ts`](../../src/lib/api/core.ts): `isTauri()` checks for
-  `__TAURI_INTERNALS__` on `window`; inside Tauri it `invoke()`s the Rust
-  command, otherwise it runs the JS `fallback`. Outside Tauri the fallbacks read
-  and write [`api/mock-store.ts`](../../src/lib/api/mock-store.ts) — an in-memory
-  store seeded with the same demo content Rust inserts on first run, so
-  components can't tell the two modes apart. This dual mode is what lets the
-  browser-fallback (T2) e2e tier drive the real UI without Rust or a database.
+  through `invokeOrFallback` in [`api/core.ts`](../../src/lib/api/core.ts).
+  Inside Tauri it `invoke()`s the Rust command. In a browser it sends the
+  command to the browser vault ([`src/lib/browser/`](../../src/lib/browser)),
+  which runs the same storage core compiled to Wasm. Unit tests and the
+  `VITE_BROWSER_MOCKS=1` fixture suite (`pnpm dev:fixtures`) use the in-memory
+  [`api/mock-store.ts`](../../src/lib/api/mock-store.ts) instead.
 - **Stores — [`src/lib/stores/`](../../src/lib/stores).** Svelte-runes state
   (`.svelte.ts`): the note tree, the active note source/status, the note-history
   bridge, profiles, signatures.
 - **Live-collab providers — [`src/lib/sync/`](../../src/lib/sync).**
   [`collab-provider.ts`](../../src/lib/sync/collab-provider.ts) (markdown/PDF) and
-  `ink-web-collab-provider.ts` speak a small binary WebSocket protocol to the
-  relays. They AES-GCM-encrypt every Yjs update with a per-note key so the relay
-  is a blind broadcast hub (frame = `[type][12-byte IV][ciphertext+tag]`); the
-  room key is distributed through Etebase, which is already E2EE.
+  `ink-web-collab-provider.ts` talk to a note's room through
+  [`room-socket.ts`](../../src/lib/sync/room-socket.ts). Every Yjs update is
+  AES-GCM-encrypted under a key derived from the note's own key, which the
+  server never has; the frame layout is in that file's header.
 
 ## The IPC boundary
 
 The frontend never imports Rust directly — it `invoke()`s `#[tauri::command]`
 functions. Errors flow back through `AppError`
 ([`src-tauri/src/error.rs`](../../src-tauri/src/error.rs)), which maps Rust errors
-to IPC error strings. Note data lives in SQLite. Root/vault configuration and recovery records use
-locked filesystem documents; the frontend holds view state and pending edits.
+to IPC error strings. Note data lives in SQLite. Root/vault configuration and
+recovery records use locked filesystem documents; the frontend holds view state
+and pending edits.
 
-## Rust backend (`src-tauri/src/`)
+## Rust backend
 
-One SQLite `Connection` sits behind a `Mutex` on the Tauri app state
-([`db/mod.rs`](../../src-tauri/src/db/mod.rs)); Tauri runs each command on its
-thread pool, holding the lock only for a single query.
+Storage lives in [`src-tauri/storage-core/`](../../src-tauri/storage-core/src),
+shared by the native app and the browser build: notes, folders, assets,
+history, search, import, backup merge, the yrs document and the SQLite
+migrations. The modules in `src-tauri/src/` with the same names are thin Tauri
+adapters around it. Natively, one SQLite `Connection` sits behind a `Mutex` on
+the app state ([`db/mod.rs`](../../src-tauri/src/db/mod.rs)), held only for a
+single query.
 
-- **Persistence.** [`notes/`](../../src-tauri/src/notes/mod.rs) (a `Note` =
-  `NoteSummary` + body; soft-delete via `trashed_at`),
-  [`collections/`](../../src-tauri/src/collections/mod.rs) (folders),
-  [`assets/`](../../src-tauri/src/assets/mod.rs) (attachment blobs for drawings,
-  markdown images and PDFs), `signatures/`. An asset is kept while any note
-  references it — the `asset_refs` table, not the note that created it — and is
-  stored by content hash, so identical bytes within one share scope are stored
-  once.
-- **Note history — [`history/`](../../src-tauri/src/history/mod.rs).** Point-in-time
-  DEFLATE-compressed snapshots of a note's markdown in `note_versions`.
-  Deliberately **local and never synced** — each device keeps its own timeline.
-  A _restore_ is applied by the editor as a normal CRDT edit, so the restored
-  content converges across devices through the ordinary sync path (replaying an
-  old CRDT state blob would be a no-op).
-- **Profiles / vaults — [`profiles.rs`](../../src-tauri/src/profiles.rs).** Each
-  profile is a self-contained directory `…/profiles/<id>/` with its own
-  `mindstream.db`, Etebase session, settings, and backups. A `profiles.json`
-  index at the environment's app-data root records the last-used startup vault;
-  live ownership comes from physical OS vault locks, not this index. Boot
-  reads it before opening any database. A legacy single-vault layout is
-  migrated into a `"default"` profile. The `MINDSTREAM_PROFILE_DIR` override
-  (dev/e2e only) selects a vault directory; `MINDSTREAM_ROOT_DIR` separately
-  isolates root documents and credentials for real-app test devices. Native
-  desktop/device preferences live at the root; content/account preferences
-  and layouts belong to the vault. Ordinary desktop startup uses a
-  long-lived coordinator with one process and isolated WebView store per vault.
-  Isolated test devices and mobile retain their single-vault flows. See
-  [storage ownership and recovery](storage-ownership-and-recovery.md) and
-  [remaining platform checks](storage-ownership-and-recovery.md#concurrent-vault-platform-checks).
-- **Auth — [`auth/mod.rs`](../../src-tauri/src/auth/mod.rs).** Etebase login. The
-  password is never stored: a random 32-byte key encrypts the saved account
-  state; the **key** goes in the OS keystore (Credential Manager / Keychain /
-  Secret Service) and the **encrypted blob** + username + server URL go in
+- **Assets.** An asset is kept while any note references it (the `asset_refs`
+  table, not the note that created it) and is stored by content hash, so
+  identical bytes within one share scope are stored once.
+- **Note history.** Point-in-time DEFLATE-compressed snapshots of a note's
+  markdown in `note_versions`. Deliberately **local and never synced**: each
+  device keeps its own timeline. A _restore_ is applied by the editor as a
+  normal CRDT edit, so the restored content converges across devices through
+  the ordinary sync path (replaying an old CRDT state blob would be a no-op).
+- **Vaults — [`profiles.rs`](../../src-tauri/src/profiles.rs).** Each vault is a
+  self-contained directory `…/profiles/<id>/` with its own `mindstream.db`,
+  account session, settings and backups. A `profiles.json` index at the app-data
+  root records the last-used vault; live ownership comes from OS locks, not
+  this index. `MINDSTREAM_PROFILE_DIR` (dev/e2e only) selects a vault directory;
+  `MINDSTREAM_ROOT_DIR` separately isolates root documents and credentials for
+  real-app test devices.
+- **Auth — [`auth/mod.rs`](../../src-tauri/src/auth/mod.rs).** The password is
+  never stored: a random 32-byte key encrypts the saved account state; the
+  **key** goes in the OS keystore (Credential Manager / Keychain / Secret
+  Service) and the **encrypted blob** + username + server URL go in
   `etebase.session`. Both halves are required to unlock, so leaking the file
   alone yields nothing.
-- **Search — [`search/mod.rs`](../../src-tauri/src/search/mod.rs).** Rust free-text
-  matcher: AND token semantics, score `+10` per title hit / `+1` per body hit,
-  with snippet + highlight ranges. [`api/search-matcher.ts`](../../src/lib/api/search-matcher.ts)
-  mirrors it for the browser fallback (kept behaviourally aligned by tests).
-- **Backup — [`backup/`](../../src-tauri/src/backup).** A zip of
-  `manifest.json` (version, account identity via `etebase_collection_uid`,
-  counts) + `data.db` (a `VACUUM INTO` snapshot). Import supports preview,
-  staged-restart restore, and in-process merge.
-- **Import — [`import`](../../src-tauri/storage-core/src/import.rs).** Brings in
-  Markdown folders, Obsidian vaults, Joplin exports and Evernote `.enex` files.
-  Each format implements a two-phase source: list every item and assign its
-  note id first, then parse one item at a time and rewrite its links against
-  the full list, so links between notes survive whatever order they are read
-  in. Runs entirely in Rust because the target is a million-note vault. See
-  [import.md](../import.md), and how it scales in
-  [import-performance.md](import-performance.md).
-- **Also here:** PDF annotate/export (`pdf_export.rs`, `pdf_text.rs`), vault
-  export (`notes_export.rs`), the macOS native menu (`native_menu.rs`), tray,
-  hotkeys, and desktop settings.
+- **Search.** Free-text matcher in `storage-core/src/search.rs`: AND token
+  semantics, score `+10` per title hit / `+1` per body hit, with snippet +
+  highlight ranges. [`api/search-matcher.ts`](../../src/lib/api/search-matcher.ts)
+  mirrors it for the mock store (kept aligned by tests).
+- **Backup — [`backup/`](../../src-tauri/src/backup).** A zip of `manifest.json`,
+  a `data.db` snapshot and, from format 2, the portable settings and plugin
+  files. Import supports preview, staged-restart restore and in-process merge.
+  See [backup portability](backup-restore-portability.md).
+- **Import — [`import`](../../src-tauri/storage-core/src/import.rs).** Markdown
+  folders, Obsidian, Joplin and Evernote, in Rust because the target is a
+  million-note vault. See [import-performance.md](import-performance.md).
+- **Also here:** PDF text extraction (`pdf_text.rs`), vault export
+  (`notes_export.rs`), the macOS native menu (`native_menu.rs`), tray, hotkeys,
+  and desktop settings. Exporting a single note to PDF or other formats happens
+  in the frontend ([`src/lib/note-exporters/`](../../src/lib/note-exporters)).
 
 ## The CRDT document model
 
-A note body is a `yrs::Doc` with a single named `body` text field, wrapped by
-[`sync/yrs_doc.rs`](../../src-tauri/src/sync/yrs_doc.rs) so nothing else imports
-`yrs`. The wire format is the **v1** update encoding to match what the JS editor
-produces. Local edits arrive as "the editor saved a new full body"; Rust diffs
-old vs new with `similar` and replays the inserts/deletes against the Y.Text, so
-a concurrent offline insert on device A and delete on device B both survive the
-merge. This encoded CRDT state is the source of truth that travels in sync.
+A note body is a `yrs::Doc`, wrapped by
+[`yrs_doc.rs`](../../src-tauri/storage-core/src/yrs_doc.rs) so nothing else
+imports `yrs`. The wire format is the **v1** update encoding to match what the
+JS editor produces. This encoded state is the source of truth that travels in
+sync.
+
+Markdown notes are schema 2: the editor owns a `prosemirror` XML fragment and
+saves its own Yjs state through `y-prosemirror`. Schema 1 is a single `body`
+Y.Text. Writers that only send a new body, such as programmatic edits, take
+that path: Rust diffs old against new with `similar` and replays the edits on
+the Y.Text, and the row is stamped schema 1 so the editor does not try to read
+it as a fragment (`storage-core/src/notes.rs`).
 
 ## Sync
 
@@ -239,25 +205,24 @@ merge. This encoded CRDT state is the source of truth that travels in sync.
   the item, merges the remote CRDT state into the local one (or takes remote
   non-CRDT fields for metadata-only rows), and retries — optimistic concurrency
   with the CRDT doing the actual conflict-free merge.
-- **Live collaboration.** For real-time co-editing, the frontend collab providers
-  connect to the relays and exchange encrypted Yjs updates directly (above),
-  separate from the at-rest Etebase sync.
+- **Live collaboration.** The collab providers exchange encrypted Yjs updates
+  through the note's room on the server (above), separate from at-rest sync.
 
-## Collection sharing
+## Sharing a folder
 
-Sharing a folder ([`sharing/`](../../src-tauri/src/sharing),
-[`sync/scopes.rs`](../../src-tauri/src/sync/scopes.rs)) creates a **scope**: one
-`mindstream.share_manifest` collection (its content is the manifest JSON) plus
-three part collections — folders / notes / assets. Sharing **re-homes** the
-subtree: every folder/note/asset under the root is stamped with `share_scope_id`
-and detached from the vault-wide collections, and `sync::scopes` then pushes and
-pulls the scope's dedicated collections so a recipient receives the real content.
-Items created or moved into a shared folder afterward inherit the scope
-automatically. Because a row carries exactly one `share_scope_id` (or none), it
-lives in exactly one collection — "one home". Incoming invitations are grouped
-into manifest-backed **bundles** (one notification per share, not one per part
-collection) that the recipient can accept or decline. Scoped sync is best-effort:
-an error there is logged, never propagated, so a broken share can't wedge the
+A shared folder ([`sharing/`](../../src-tauri/src/sharing),
+[`sync/scopes.rs`](../../src-tauri/src/sync/scopes.rs)) is one collection of
+type `mindstream.shared`. Its folders, notes and attachments are items in it,
+told apart by type exactly as in the vault, and its content is a small manifest
+naming the root folder and who shared it. So sharing is one invitation and one
+membership, with no state in which someone holds part of a folder.
+
+Sharing **re-homes** the subtree: every row under the root is stamped with the
+collection's uid as `share_scope_id` and detached from the vault, and
+`sync::scopes` pushes and pulls it there. Items created in or moved into a
+shared folder later inherit the scope. A row carries one `share_scope_id` or
+none, so it lives in exactly one collection. Scoped sync is best effort: an
+error there is logged, never propagated, so a broken share can't wedge the
 user's own vault sync.
 
 ## The backend stack
@@ -281,8 +246,8 @@ Running one is covered in the [self-hosting quick start](../self-hosting.md).
 ## How this shapes testing
 
 The layering maps directly onto the [test tiers](e2e/strategy.md): pure logic is
-unit-tested (T1); the mock-store fallback lets Playwright exercise the whole UI
-without a backend (T2); the real IPC + SQLite + restart path needs the packaged
-binary (T3); and sync/sharing/live-collab convergence needs two real clients plus
-the backend stack (T4). See [e2e-tests/README.md](../../e2e-tests/README.md) to run
+unit-tested (T1); the mock store lets Playwright exercise the whole UI without
+a backend (T2); the real IPC + SQLite + restart path needs the packaged binary
+(T3); and sync/sharing/live-collab convergence needs two real clients plus the
+backend stack (T4). See [e2e-tests/README.md](../../e2e-tests/README.md) to run
 them.

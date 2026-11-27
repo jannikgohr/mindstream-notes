@@ -2,8 +2,8 @@
 
 Some behaviour that looks like a bug is a deliberate trade-off, and some is not
 built yet. Check here before you report a problem with history, sync or an
-import. Each entry says whether it is **by design**, a **known limitation** or
-**planned**.
+import. Each entry says whether it is **by design**, a **known limitation**,
+**planned** or **deprecated**.
 
 ## History and restoring
 
@@ -107,10 +107,9 @@ could become drawing canvases, but that import has not been written.
 
 ### Older duplicate attachments are not merged — _by design_
 
-Identical attachments are now stored once, whether they come from an import or
-are added by hand. Copies that were already in a vault before that change stay
-separate, because merging them would mean rewriting the notes that point at
-them.
+Identical attachments are stored once, whether they come from an import or are
+added by hand. Copies saved by older versions of the app stay separate, because
+merging them would mean rewriting the notes that point at them.
 
 ### Old title links pick the most recently edited note — _deprecated_
 

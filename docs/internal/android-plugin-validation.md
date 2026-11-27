@@ -2,10 +2,9 @@
 
 How to validate the Wasm plugin host on a physical Android device. The last run
 is the [24 October 2026 report](benchmarks/android-plugin-validation-2026-10-24.md).
-Its failed document save is fixed, see the
-[export save fix](benchmarks/android-export-fix-2026-10-25.md), and the signed
-call latency it measured is
-[issue #116](https://github.com/jannikgohr/mindstream-notes/issues/116).
+The document save it found broken is fixed; the signed call latency it measured
+is [issue #116](https://github.com/jannikgohr/mindstream-notes/issues/116).
+Rerun the measurements below to close that issue.
 
 ## Revision and scope
 
@@ -123,8 +122,9 @@ first export; do not label that call cold compilation without checking.
 1. Measure cold and warm startup to an interactive app, not just Activity first
    draw. Record the readiness action and sample count, with p50/p95/max.
 2. Measure trivial cached calls and real Templates render/menu calls through
-   app IPC. The historical render p95 was 11.4 ms against a target below 5 ms;
-   standalone guest timing does not close the application-level gap.
+   app IPC. The goal is a p95 below 10 ms for frequent calls, which signed
+   third-party calls missed at 68.8 ms; standalone guest timing does not close
+   the application-level gap.
 3. Record guest linear memory separately from whole-app RSS/PSS and high-water
    memory. Take idle, post-compilation, repeated-call and post-idle checkpoints.
    Include at least 1,000 calls and a longer idle/repeated-use soak, stating the
@@ -134,7 +134,8 @@ first export; do not label that call cold compilation without checking.
    matching pre-migration build at `2bdba0b4`. Match frontend, profile, ABI,
    features, signing/packaging and shared startup fixes. Record any necessary
    baseline patches. The old stub-frontend binary is not a valid normal-app
-   size baseline. The historical added-size target was 15,000,000 bytes.
+   size baseline. The added-size budget is 15,000,000 bytes; the last run
+   stayed well inside it.
 5. Repeat representative workloads with stable charge/thermal state. Another
    physical device or ARMv7 CPU adds coverage; explicitly mark unavailable
    devices and ABIs as untested. The 32 MiB guest default also needs evidence
