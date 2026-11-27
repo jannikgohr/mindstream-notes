@@ -562,7 +562,7 @@
                     <button
                       type="button"
                       data-hotkey-recorder="true"
-                      class="flex h-7 min-w-[10rem] items-center justify-center gap-1 rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground"
+                      class="flex h-7 min-w-[10rem] items-center justify-center gap-1 rounded-md border border-ring bg-accent px-2 font-mono text-xs text-accent-foreground outline-none focus:ring-1 focus:ring-ring"
                       onkeydown={onRecordKeyDown}
                       onclick={(e) => e.preventDefault()}
                       use:focusOnMount

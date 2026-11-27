@@ -85,6 +85,7 @@
   import { settings } from '$lib/settings/store.svelte';
   import { getNoteStatus } from '$lib/stores/note-status.svelte';
   import { SvelteSet } from 'svelte/reactivity';
+  import { dropDoesNothing } from './dock-drop-overlay';
 
   let dockHost: HTMLDivElement | null = $state(null);
   let dock: DockviewApi | null = null;
@@ -401,6 +402,9 @@
       pointerDraggedPanel = null;
       pointerTabDropTarget = null;
       markDragging();
+    });
+    dock.onWillShowOverlay((event) => {
+      if (dropDoesNothing(event, component.api.id)) event.preventDefault();
     });
 
     await loadProfiles();

@@ -572,7 +572,11 @@
     class="pointer-events-none invisible absolute whitespace-nowrap text-xs font-medium"
     >{mainAction ? labelFor(mainAction) : ''}</span
   >
-  <div class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+  <!-- The padding, cancelled by the margin, keeps the main button's 2px focus
+       ring inside the clip. -->
+  <div
+    class="-m-0.5 flex min-w-0 flex-1 items-center gap-1 overflow-hidden p-0.5"
+  >
     {#each renderedTopActions as action, index (action.id)}
       {@const main = index === 0 && !placeholderAt('top', 0)}
       <!-- A drop in front of the row previews the new main button. -->
