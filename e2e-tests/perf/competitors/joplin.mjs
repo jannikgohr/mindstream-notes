@@ -12,13 +12,23 @@
  *
  * Joplin exits on start flags it doesn't know, Playwright's --inspect
  * included, so the main process is reached through the Node inspector that
- * SIGUSR1 opens, the way Joplin's own Playwright tests stub the file picker.
- * HOME points at a scratch directory, so the real profile is never touched.
+ * SIGUSR1 opens (process._debugProcess on Windows), the way Joplin's own
+ * Playwright tests stub the file picker. HOME (USERPROFILE on Windows) and
+ * --user-data-dir point at a scratch directory, so the real profile is
+ * never touched.
  */
 import { cp, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { launch, median, pssMB, sleep, until } from '../measure.mjs';
-import { app, cache, log, save, setup } from './common.mjs';
+import {
+  gpu,
+  launch,
+  median,
+  memoryKind,
+  pssMB,
+  sleep,
+  until
+} from '../measure.mjs';
+import { app, cache, homeEnv, log, save, setup } from './common.mjs';
 
 const { values, vault, label, query } = await setup();
 const { exe, version } = await app('joplin');
@@ -29,6 +39,8 @@ const copy = join(work, basename(vault));
 const results = {
   app: `Joplin ${version}`,
   vault: label,
+  platform: process.platform,
+  memory: memoryKind,
   coldStart: [],
   heapMB: {},
   pssMB: {}
@@ -40,7 +52,9 @@ await cp(vault, copy, { recursive: true });
 
 /** Evaluates `expression` in Joplin's main process. */
 async function main(joplin, expression) {
-  process.kill(joplin.proc.pid, 'SIGUSR1');
+  // What SIGUSR1 does on Linux; Windows has no such signal.
+  if (process.platform === 'win32') process._debugProcess(joplin.proc.pid);
+  else process.kill(joplin.proc.pid, 'SIGUSR1');
   let targets;
   for (let i = 0; i < 50 && !Array.isArray(targets); i++) {
     targets = await fetch('http://127.0.0.1:9229/json/list')
@@ -69,8 +83,11 @@ async function main(joplin, expression) {
 }
 
 async function start() {
-  const joplin = await launch(exe, ['--no-welcome'], {
-    env: { HOME: home },
+  // On Windows its Electron data, and the single-instance lock with it,
+  // would stay in %APPDATA% beside a Joplin you may have open.
+  const userData = `--user-data-dir=${join(home, 'electron')}`;
+  const joplin = await launch(exe, ['--no-welcome', userData], {
+    env: homeEnv(home),
     port: 9335,
     pick: (p) => p.evaluate(() => document.title.startsWith('Joplin'))
   });
@@ -97,6 +114,7 @@ const inSidebar = (name) =>
 let joplin = await start();
 try {
   let page = joplin.page;
+  results.gpu = await gpu(page);
   await until(page, () => document.body.innerText.includes('All notes'));
 
   const imported = new Promise((resolve) =>

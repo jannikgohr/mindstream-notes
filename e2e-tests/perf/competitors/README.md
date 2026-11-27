@@ -3,8 +3,8 @@
 Runs Obsidian, Joplin and Logseq through the steps of the
 [large-vault benchmark](../wikipedia/bench.mjs), on the same vault, with the
 same timing and memory helpers ([measure.mjs](../measure.mjs)). These are
-manual tools for Linux with Xvfb and stay out of CI. Results from a run are
-in [docs/internal/benchmarks](../../../docs/internal/benchmarks/).
+manual tools for Linux (under Xvfb) and Windows, and stay out of CI. Results
+from a run are in [docs/internal/benchmarks](../../../docs/internal/benchmarks/).
 
 ```sh
 # Mindstream, with results next to the others
@@ -19,8 +19,14 @@ xvfb-run -a -s "-screen 0 1920x1080x24" node e2e-tests/perf/competitors/logseq.m
 node e2e-tests/perf/competitors/summary.mjs   # one Markdown table of all results
 ```
 
-The first run of each script downloads that app's pinned AppImage into
-`~/.cache/mindstream-perf/apps/`, checks its SHA-256 and unpacks it. The
+On Windows, run the same commands without `xvfb-run`, and pass `--headed` to
+`bench:vault` so Chromium draws on the GPU. The apps open real windows; keep
+Joplin's uncovered, since it can't be told to keep drawing when hidden.
+
+The first run of each script downloads that app's pinned build into
+`~/.cache/mindstream-perf/apps/`, checks its SHA-256 and unpacks it: the
+AppImage on Linux, the installer or zip on Windows through 7-Zip, which must
+be in `C:\Program Files\7-Zip`. Nothing is installed. The
 versions live in [common.mjs](common.mjs). Moving to a new release means
 changing the version, URL and checksum together, then rerunning every app.
 The selectors and internals each script reads (Obsidian's `app.metadataCache`,
@@ -39,9 +45,12 @@ Joplin's note list classes, Logseq's search dialog) can break on an update.
 - Every app starts as its own process with the DevTools protocol on, and a
   cold start is timed from spawning the process, median of `--runs` (3).
   Mindstream runs its browser build in Playwright's Chromium.
-- Steps are timed by polling the page every 50 ms. Memory is PSS summed over
-  the app's process tree, so Chromium's and Electron's many processes count
-  once each.
+- Steps are timed by polling the page every 50 ms. Memory is summed over the
+  app's process tree: PSS on Linux, so Chromium's and Electron's many
+  processes count shared pages once; on Windows the private working set
+  (Task Manager's "Memory"), which leaves shared pages out. The two don't
+  compare with each other.
+- Each result records the platform and the GPU the page renders with.
 - Graph frame rates are taken while the layout moves (first 5 s and a zoom),
   then again after it settles or `--settle` seconds (300) pass.
 
@@ -49,7 +58,7 @@ Joplin's note list classes, Logseq's search dialog) can break on an update.
 
 - **No GPU.** Under Xvfb every app rasterises in software. Absolute frame
   rates say more about the machine than the app, but the apps share the
-  handicap.
+  handicap. With a GPU, frame rates top out at the display's refresh rate.
 - **Obsidian** reads the vault in place: its "import" is the first start until
   its metadata cache is clean. Its default graph also draws a node for every
   link to a missing note (about 238k on the 20k vault). Pass
@@ -59,13 +68,17 @@ Joplin's note list classes, Logseq's search dialog) can break on an update.
   the SIGTERM.
 - **Joplin** exits on start flags it doesn't know, so Playwright can't launch
   it. Its main process is reached through the Node inspector that SIGUSR1
-  opens. `HOME` points at a scratch directory; the real profile is never
-  touched. The plain Markdown importer keeps front matter as text, not tags,
+  opens (`process._debugProcess` on Windows). `HOME` (`USERPROFILE` on
+  Windows) and `--user-data-dir` point at a scratch directory, so the real
+  profile and a running Joplin are never touched. The plain Markdown importer keeps front matter as text, not tags,
   and search finds nothing until Joplin's background indexing has run.
 - **Logseq** 2.0.2 imports only Logseq file graphs and drops paragraphs that
   aren't bullets, so the script converts the vault first. It failed to import
   every Wikipedia vault tried (1.5k, 5k and 20k notes), each time after about
-  105 s; the script then saves what it has and exits with 1.
+  105 s; the script then saves what it has and exits with 1. On Windows it
+  writes its graph list to `.logseq` in the real profile whatever
+  `USERPROFILE` says, so the script refuses to run while that folder exists
+  and deletes it afterwards.
 - **Chromium** started by hand waits about 25 s for the system keyring
   without `--password-store=basic`, and Chrome for Testing reopens the last
   session's tabs, which then wait on each other for the database.

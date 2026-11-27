@@ -29,6 +29,16 @@ const fps = (f) => (f ? `${f.fps} fps, p95 ${f.p95} ms, max ${f.max}` : '—');
 const mb = (v) => (v == null ? '—' : `${v} MB`);
 const rows = [
   [
+    'Platform, GPU',
+    (r) =>
+      [
+        r.platform ?? 'linux',
+        r.gpu?.match(/^ANGLE \([^,]+, ([^(,]+)/)?.[1].trim() ?? r.gpu
+      ]
+        .filter(Boolean)
+        .join(', ')
+  ],
+  [
     'Import / first index',
     (r) => (r.importFailed ? 'failed' : time(r.import ?? r.firstIndex))
   ],
@@ -53,8 +63,9 @@ const rows = [
   ['Zoom, early', (r) => fps(r.graphZoomFrames)],
   ['Frames, late', (r) => fps(r.graphLateFrames)],
   ['Zoom, late', (r) => fps(r.graphLateZoomFrames)],
-  ['PSS idle', (r) => mb(r.pssMB?.idle)],
-  ['PSS with graph, late', (r) => mb(r.pssMB?.graphLate)]
+  ['Memory measure', (r) => r.memory ?? 'PSS'],
+  ['Memory idle', (r) => mb(r.pssMB?.idle)],
+  ['Memory with graph, late', (r) => mb(r.pssMB?.graphLate)]
 ];
 
 console.log(`| | ${runs.map((r) => r.name).join(' | ')} |`);
