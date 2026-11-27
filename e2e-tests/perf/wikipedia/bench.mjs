@@ -1,17 +1,27 @@
 /**
  * Large-vault bench: imports the Wikipedia vault from `make-vault.mjs` into
- * the browser build and times what scales with the vault.
+ * the browser build, or the desktop app with --native, and times what scales
+ * with the vault.
  *
  *   node e2e-tests/perf/wikipedia/bench.mjs [--articles 20000] [--small]
  *     [--vault DIR --query TEXT] [--url URL] [--skip-build] [--headed]
- *     [--runs 3] [--settle 300] [--json results.json]
- *     [--profile graph.cpuprofile]
+ *     [--native [--exe PATH]] [--runs 3] [--settle 300]
+ *     [--json results.json] [--profile graph.cpuprofile]
  *
  * Without --url it builds the app (`build:wasm`, `build`) and serves it with
  * `vite preview` on port 1460, so the numbers come from a production bundle.
  * Each run starts from an empty vault in a fresh browser profile. Chromium
  * runs as its own process, started and quit like an app, so cold starts and
  * memory compare with the Electron apps in ../competitors/.
+ *
+ * --native runs the desktop app instead, Windows only: a release build with
+ * the test-instance seam, from
+ *   node src-tauri/scripts/tauri.mjs build --no-bundle --features e2e-data-dir
+ * (--exe defaults to src-tauri/target/release/mindstream-notes.exe). It runs
+ * as a test instance with its own data and WebView2 folders, so an installed
+ * Mindstream, running or not, is left alone. The folder picker is answered
+ * by MINDSTREAM_E2E_IMPORT_FOLDER; everything else goes through the same UI
+ * as the browser build. Storage timings are the app's IPC commands.
  *
  * --small imports the 28-note vault in ../fixtures/small-vault instead and
  * searches it for "lisbon". --vault imports any folder; give it a --query
@@ -42,7 +52,7 @@
  * that times out leaves a screenshot in .output/.
  */
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,6 +81,11 @@ const { values } = parseArgs({
     url: { type: 'string' },
     'skip-build': { type: 'boolean', default: false },
     headed: { type: 'boolean', default: false },
+    native: { type: 'boolean', default: false },
+    exe: {
+      type: 'string',
+      default: join(root, 'src-tauri/target/release/mindstream-notes.exe')
+    },
     runs: { type: 'string', default: '3' },
     settle: { type: 'string', default: '300' },
     json: { type: 'string' },
@@ -151,11 +166,17 @@ const vault = values.small
       )
     ).trim());
 const query = values.query ?? (values.small ? 'lisbon' : 'europe');
-const server = values.url
-  ? { url: values.url, stop: () => {} }
-  : await startServer();
+if (values.native && process.platform !== 'win32')
+  throw new Error('--native drives WebView2 over CDP, so Windows only');
+const server =
+  values.url || values.native
+    ? { url: values.url, stop: () => {} }
+    : await startServer();
 
 const results = {
+  app: values.native
+    ? 'Mindstream desktop (WebView2, native SQLite)'
+    : 'Mindstream web (Chromium, OPFS)',
   vault: basename(vault),
   query,
   platform: process.platform,
@@ -169,10 +190,25 @@ const save = () =>
 if (values.json) await mkdir(dirname(values.json), { recursive: true });
 
 // Times every storage request, and the graph layout worker's last update:
-// it stops posting once its layout has settled.
+// it stops posting once its layout has settled. Storage is the sqlite worker
+// in the browser build and IPC commands in the desktop app.
 function instrument() {
   const Native = window.Worker;
   window.__bench = { storage: [], layoutAt: 0, layoutMessages: 0 };
+  const tauri = window.__TAURI_INTERNALS__;
+  if (tauri) {
+    const invoke = tauri.invoke;
+    tauri.invoke = async (command, ...rest) => {
+      const start = performance.now();
+      try {
+        return await invoke(command, ...rest);
+      } finally {
+        const ms = Math.round(performance.now() - start);
+        if (ms > 100) window.__bench.storage.push(`${command} ${ms}`);
+        if (ms > 500) console.log(`[bench] ipc ${command}: ${ms} ms`);
+      }
+    };
+  }
   window.Worker = class extends Native {
     constructor(url, options) {
       super(url, options);
@@ -208,7 +244,49 @@ const cache = join(homedir(), '.cache', 'mindstream-perf');
 await mkdir(cache, { recursive: true });
 const profile = await mkdtemp(join(cache, 'profile-'));
 
+// The desktop app's own WebView2 flags, repeated because the environment
+// variable that carries the DevTools port may replace them.
+const webviewArgs = JSON.parse(
+  await readFile(join(root, 'src-tauri/tauri.conf.json'), 'utf8')
+).app.windows[0].additionalBrowserArgs;
+
+async function startNative() {
+  const app = await launch(values.exe, [], {
+    portFlag: false,
+    port: CDP_PORT,
+    env: {
+      MINDSTREAM_ROOT_DIR: join(profile, 'root'),
+      WEBVIEW2_USER_DATA_FOLDER: join(profile, 'webview'),
+      MINDSTREAM_E2E_IMPORT_FOLDER: vault,
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `${webviewArgs} --enable-precise-memory-info --remote-debugging-port=${CDP_PORT}`
+    },
+    pick: (p) => p.evaluate(() => !!window.__TAURI_INTERNALS__),
+    // Like the window's close button: the app quits when its main window
+    // closes and saves on the way out.
+    quit: (page) =>
+      page.evaluate(() =>
+        window.__TAURI_INTERNALS__.invoke('plugin:window|close', {
+          label: 'main'
+        })
+      )
+  });
+  const { page } = app;
+  page.on('pageerror', (error) => console.error('page error:', error.message));
+  page.on('console', (message) => {
+    if (message.text().startsWith('[bench]')) console.error(message.text());
+  });
+  try {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.evaluate(instrument);
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
+  return app;
+}
+
 async function start() {
+  if (values.native) return startNative();
   // Chrome for Testing restores the last session's tabs, and a second tab
   // of the app waits for the first to release the database.
   await rm(join(profile, 'Default', 'Sessions'), {
@@ -289,11 +367,15 @@ try {
     .getByRole('button', { name: 'Import notes', exact: true })
     .click();
   const dialog = page.getByRole('alertdialog');
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser'),
-    dialog.getByRole('button', { name: /Choose a folder/ }).click()
-  ]);
-  await chooser.setFiles(vault);
+  const choose = dialog.getByRole('button', { name: /Choose a folder/ });
+  if (values.native) await choose.click();
+  else {
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      choose.click()
+    ]);
+    await chooser.setFiles(vault);
+  }
   await time(
     'import',
     () => dialog.getByRole('button', { name: 'Import', exact: true }).click(),
