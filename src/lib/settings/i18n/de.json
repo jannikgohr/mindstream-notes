@@ -1276,6 +1276,7 @@
     "account.server.invalidUrl": "Keine gültige URL",
     "account.server.badScheme": "Die URL muss mit http:// oder https:// beginnen (nicht {scheme})",
     "account.server.noHost": "Die URL braucht einen Hostnamen",
+    "account.server.httpsRequired": "Unverschlüsseltes http:// geht nur für localhost, .local, .lan oder eine private Netzwerkadresse. Nutze https://.",
     "account.server.checking": "Prüfe…",
     "account.server.replied": "Server unter {url} ist erreichbar und kompatibel",
     "account.server.unhealthy": "Die Prüfung ergab HTTP {status} unter {url}",

@@ -48,6 +48,9 @@ const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
  * Rejected:
  *
  *   "ftp://x.com"   → error: scheme not allowed
+ *   "http://x.com"  → error: plain http only reaches localhost, .local,
+ *                     .lan and private addresses (mirrors `parse_server_url`
+ *                     in src-tauri/src/auth/mod.rs)
  *   "ws://x.com"    → error: scheme not allowed (we derive ws from
  *                     https client-side)
  *   "not a url"     → error: couldn't parse
@@ -82,6 +85,9 @@ export function normalizeServerUrl(raw: string): ServerUrlValidation {
   if (!parsed.hostname) {
     return { url: '', error: tUi('account.server.noHost') };
   }
+  if (parsed.protocol === 'http:' && !isLocalHost(parsed.hostname)) {
+    return { url: '', error: tUi('account.server.httpsRequired') };
+  }
 
   parsed.search = '';
   parsed.hash = '';
@@ -89,6 +95,40 @@ export function normalizeServerUrl(raw: string): ServerUrlValidation {
   let url = parsed.toString();
   if (url.endsWith('/')) url = url.slice(0, -1);
   return { url, error: null };
+}
+
+function isLocalHost(hostname: string): boolean {
+  if (
+    hostname === 'localhost' ||
+    ['.localhost', '.local', '.lan'].some((suffix) => hostname.endsWith(suffix))
+  ) {
+    return true;
+  }
+  const v4 = hostname.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (v4) return isLocalIpv4(Number(v4[1]), Number(v4[2]));
+  if (!hostname.startsWith('[')) return false;
+  // URL serialises IPv6 compressed and lowercase, and an IPv4-mapped
+  // address in hex: [::ffff:c0a8:1].
+  const v6 = hostname.slice(1, -1);
+  if (v6 === '::1') return true;
+  const mapped = v6.match(/^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/);
+  if (mapped) {
+    const high = parseInt(mapped[1], 16);
+    return isLocalIpv4(high >> 8, high & 0xff);
+  }
+  const first = parseInt(v6.split(':')[0] || '0', 16);
+  return (first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80;
+}
+
+function isLocalIpv4(a: number, b: number): boolean {
+  return (
+    a === 127 ||
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && (b & 0xc0) === 64)
+  );
 }
 
 /**

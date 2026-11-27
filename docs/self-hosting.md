@@ -102,6 +102,12 @@ http://192.168.1.50:3735/api/v1/mindstream/info/
 Replace `192.168.1.50` with the server's actual LAN IP. In the app, use
 `http://192.168.1.50:3735` as the server URL, including `http://`.
 
+The app accepts `http://` only for `localhost`, a name ending in `.local` or
+`.lan`, a private network address (`10.x`, `172.16.x` to `172.31.x`,
+`192.168.x`, IPv6 `fc00::/7` or link-local) or a Tailscale-style
+`100.64.0.0/10` address. Any other name or a public address needs `https://`,
+so use option B for those.
+
 ### Option B: Domain over HTTPS (an existing reverse proxy)
 
 Use this if you already run a reverse proxy (for example, Caddy, nginx, Traefik,

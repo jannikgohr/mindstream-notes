@@ -20,8 +20,8 @@ use tauri::{AppHandle, Manager};
 use crate::error::{AppError, CommandError, CommandErrorCode, CommandResult};
 
 use super::{
-    active_keyring_account, client_for, end_session_locally, persist_account, resolve_server_url,
-    session_path, store_session, try_restore, SessionInfo,
+    active_keyring_account, client_for, end_session_locally, parse_server_url, persist_account,
+    resolve_server_url, session_path, store_session, try_restore, SessionInfo,
 };
 
 /// The server could not be asked at all.
@@ -427,13 +427,7 @@ pub struct ServerInfo {
 }
 
 fn info_url(server_url: &str) -> Result<Url, AppError> {
-    let mut url =
-        Url::parse(server_url).map_err(|e| AppError::InvalidArg(format!("server URL: {e}")))?;
-    if url.scheme() != "http" && url.scheme() != "https" {
-        return Err(AppError::InvalidArg(
-            "server URL must use http:// or https://".into(),
-        ));
-    }
+    let mut url = parse_server_url(server_url)?;
     url.set_query(None);
     url.set_fragment(None);
     if !url.path().ends_with('/') {
@@ -507,6 +501,7 @@ pub async fn account_server_info(
     let server_url = resolve_server_url(&server_type, server_url.as_deref())?;
     let client = reqwest::Client::builder()
         .timeout(SERVER_INFO_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("server info client: {e}"))?;
     fetch_server_info(&client, &server_url).await

@@ -15,6 +15,7 @@
 //! file alone yields nothing without the keystore entry.
 
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -190,18 +191,60 @@ fn describe_device(machine: &str, os: &str) -> String {
 }
 
 pub(crate) fn client_for(server_url: &str) -> AppResult<Client> {
+    parse_server_url(server_url)?;
     Client::new(&device_name(), server_url)
         .map_err(|e| AppError::InvalidArg(format!("etebase client: {e}")))
 }
 
-fn health_url(server_url: &str) -> AppResult<Url> {
-    let mut url =
+/// Parse a sync server address. Plain http is only for a server on this
+/// device or a private network: anywhere else the login exchange and the
+/// session token would cross the internet readable by anyone on the path.
+/// Requests to the server never follow redirects, like the Etebase client,
+/// so a server cannot send them on to a plain http address.
+pub(crate) fn parse_server_url(server_url: &str) -> AppResult<Url> {
+    let url =
         Url::parse(server_url).map_err(|e| AppError::InvalidArg(format!("server URL: {e}")))?;
-    if url.scheme() != "http" && url.scheme() != "https" {
-        return Err(AppError::InvalidArg(
+    match url.scheme() {
+        "https" => Ok(url),
+        "http" if url.host_str().is_some_and(is_local_host) => Ok(url),
+        "http" => Err(AppError::InvalidArg(
+            "server URL must use https:// unless the server is on this device or a private network"
+                .into(),
+        )),
+        _ => Err(AppError::InvalidArg(
             "server URL must use http:// or https://".into(),
-        ));
+        )),
     }
+}
+
+fn is_local_host(host: &str) -> bool {
+    if host == "localhost"
+        || [".localhost", ".local", ".lan"]
+            .iter()
+            .any(|suffix| host.ends_with(suffix))
+    {
+        return true;
+    }
+    let is_local_v4 = |ip: Ipv4Addr| {
+        let [a, b, ..] = ip.octets();
+        // 100.64.0.0/10 is shared address space, where Tailscale and other
+        // mesh VPNs number their peers.
+        ip.is_loopback() || ip.is_private() || ip.is_link_local() || (a == 100 && b & 0xc0 == 64)
+    };
+    match host.trim_start_matches('[').trim_end_matches(']').parse() {
+        Ok(IpAddr::V4(ip)) => is_local_v4(ip),
+        Ok(IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.to_ipv4_mapped().is_some_and(is_local_v4)
+        }
+        Err(_) => false,
+    }
+}
+
+fn health_url(server_url: &str) -> AppResult<Url> {
+    let mut url = parse_server_url(server_url)?;
     url.set_query(None);
     url.set_fragment(None);
     if !url.path().ends_with('/') {
@@ -586,6 +629,7 @@ pub async fn probe_server_reachable(server_url: &str) -> Result<(), String> {
     let url = health_url(server_url).map_err(|e| e.to_string())?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REACHABILITY_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("reachability client: {e}"))?;
     client
@@ -602,6 +646,7 @@ pub async fn check_etebase_server_url(server_url: String) -> CommandResult<Serve
     let url = health_url(&server_url).map_err(String::from)?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("server check client: {e}"))?;
     let response = client
@@ -666,7 +711,12 @@ mod tests {
                         break;
                     }
                 }
-                write!(stream, "HTTP/1.1 {status} STATUS\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                let location = if (300..400).contains(&status) {
+                    "Location: http://127.0.0.1:9/moved\r\n"
+                } else {
+                    ""
+                };
+                write!(stream, "HTTP/1.1 {status} STATUS\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
             paths
         });
@@ -702,6 +752,7 @@ mod tests {
                 Some("not_a_mindstream_server"),
             ),
             (404, "Not found", Some("not_a_mindstream_server")),
+            (302, "", Some("not_a_mindstream_server")),
         ] {
             let (url, server) =
                 serve_url_check(vec![(200, "ok\n".into()), (info_status, body.into())]);
@@ -727,6 +778,15 @@ mod tests {
         let result = check_etebase_server_url(url).await.unwrap();
         assert!(!result.ok);
         assert_eq!(result.status, 503);
+        assert_eq!(server.join().unwrap(), ["/nested/healthz"]);
+    }
+
+    #[tokio::test]
+    async fn url_check_does_not_follow_redirects() {
+        let (url, server) = serve_url_check(vec![(301, String::new())]);
+        let result = check_etebase_server_url(url).await.unwrap();
+        assert!(!result.ok);
+        assert_eq!(result.status, 301);
         assert_eq!(server.join().unwrap(), ["/nested/healthz"]);
     }
 
@@ -826,6 +886,45 @@ mod tests {
         assert!(resolve_server_url("self-hosted", Some("  ")).is_err());
         assert!(resolve_server_url("self-hosted", None).is_err());
         assert!(resolve_server_url("local-only", None).is_err());
+    }
+
+    #[test]
+    fn plain_http_only_reaches_local_servers() {
+        for local in [
+            "http://localhost:8080",
+            "http://notes.localhost",
+            "http://nas.local:3735",
+            "http://nas.lan",
+            "http://127.0.0.1:8080",
+            "http://10.0.0.5",
+            "http://172.16.1.1",
+            "http://192.168.1.20/notes",
+            "http://169.254.0.9",
+            "http://100.101.102.103",
+            "http://[::1]:8080",
+            "http://[fd12::1]",
+            "http://[fe80::1]",
+            "http://[::ffff:192.168.0.1]",
+            "https://notes.example.com",
+        ] {
+            assert!(parse_server_url(local).is_ok(), "{local}");
+        }
+        for remote in [
+            "http://notes.example.com",
+            "http://nas",
+            "http://8.8.8.8",
+            "http://172.32.0.1",
+            "http://100.128.0.1",
+            "http://[2001:db8::1]",
+            "http://[::ffff:8.8.8.8]",
+            "http://localhost.example.com",
+            "http://nas.local.example.com",
+            "http://example.lane",
+            "ftp://localhost",
+        ] {
+            assert!(parse_server_url(remote).is_err(), "{remote}");
+            assert!(client_for(remote).is_err(), "{remote}");
+        }
     }
 
     #[test]
