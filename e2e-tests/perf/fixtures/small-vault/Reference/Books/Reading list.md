@@ -1,0 +1,3 @@
+- [ ] Braiding Sweetgrass
+- [ ] The Dawn of Everything
+- [x] Piranesi

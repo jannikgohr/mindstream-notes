@@ -2,28 +2,43 @@
  * Large-vault bench: imports the Wikipedia vault from `make-vault.mjs` into
  * the browser build and times what scales with the vault.
  *
- *   node e2e-tests/perf/wikipedia/bench.mjs [--articles 20000] [--url URL]
- *     [--skip-build] [--headed] [--json results.json] [--profile graph.cpuprofile]
+ *   node e2e-tests/perf/wikipedia/bench.mjs [--articles 20000] [--small]
+ *     [--vault DIR --query TEXT] [--url URL] [--skip-build] [--headed]
+ *     [--runs 3] [--settle 300] [--json results.json]
+ *     [--profile graph.cpuprofile]
  *
  * Without --url it builds the app (`build:wasm`, `build`) and serves it with
  * `vite preview` on port 1460, so the numbers come from a production bundle.
- * Each run starts from an empty vault in a fresh browser profile.
+ * Each run starts from an empty vault in a fresh browser profile. Chromium
+ * runs as its own process, started and quit like an app, so cold starts and
+ * memory compare with the Electron apps in ../competitors/.
+ *
+ * --small imports the 28-note vault in ../fixtures/small-vault instead and
+ * searches it for "lisbon". --vault imports any folder; give it a --query
+ * that matches some of its notes.
  *
  * What it reports, in milliseconds unless the name says otherwise:
- *   import            Import pressed → "Import finished"
- *   boot              reload → the imported folder in the file tree
- *   search            query typed → first result
- *   openNote          result clicked → the editor showing the note
- *   localGraph        Local graph opened → its links indexed and drawn
- *   graphTab          Open graph view → the whole vault drawn
- *   graphFrames       frame times while the tab's layout settles (5 s)
- *   graphZoomFrames   frame times while zooming the tab's graph (2 s)
- *   heapMB            JS heap after each step, where Chromium reports it
+ *   import             Import pressed → "Import finished"
+ *   coldStart          browser started → the imported folder in the file
+ *                      tree, once per --runs; coldStartMedian is the median
+ *   searchFirst        query typed → first result
+ *   openNote           result clicked → the editor showing the note
+ *   localGraph         Local graph opened → its links indexed and drawn
+ *   graphTab           Open graph view → the whole vault drawn
+ *   graphFrames        frame times while the tab's layout settles (5 s)
+ *   graphZoomFrames    frame times while zooming the tab's graph (2 s)
+ *   graphSettled       Open graph view → the layout worker's last update,
+ *                      null if it was still moving after --settle seconds
+ *   graphLateFrames    frame times once settled, or after --settle (5 s)
+ *   graphLateZoomFrames  the same while zooming (2 s)
+ *   heapMB             JS heap after each step, where Chromium reports it
+ *   pssMB              memory of the whole browser process tree (Linux)
+ *   slowStorage        storage requests over 100 ms, with their command
  *
  * --profile saves a CPU profile of the graphFrames window, which DevTools
  * opens, and prints the functions that took the most time in it. Storage
- * requests slower than half a second are logged as they finish, with their
- * command, and a step that times out leaves a screenshot in .output/.
+ * requests slower than half a second are logged as they finish, and a step
+ * that times out leaves a screenshot in .output/.
  */
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -31,21 +46,35 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { chromium } from '@playwright/test';
+import {
+  chromium,
+  frames,
+  launch,
+  median,
+  pssMB,
+  sleep,
+  until,
+  zoom
+} from '../measure.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const { values } = parseArgs({
   options: {
     articles: { type: 'string', default: '20000' },
+    small: { type: 'boolean', default: false },
     vault: { type: 'string' },
+    query: { type: 'string' },
     url: { type: 'string' },
     'skip-build': { type: 'boolean', default: false },
     headed: { type: 'boolean', default: false },
+    runs: { type: 'string', default: '3' },
+    settle: { type: 'string', default: '300' },
     json: { type: 'string' },
     profile: { type: 'string' }
   }
 });
 const PORT = 1460;
+const CDP_PORT = 9334;
 // Import and boot scale with the vault; anything else this slow is a hang.
 const LONG = 30 * 60_000;
 const STEP = 5 * 60_000;
@@ -84,6 +113,7 @@ async function startServer() {
     ],
     { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] }
   );
+  process.on('exit', () => server.kill());
   await new Promise((resolve, reject) => {
     server.once('close', (code) =>
       reject(new Error(`vite preview exited with ${code}`))
@@ -95,92 +125,137 @@ async function startServer() {
   return { url: `http://localhost:${PORT}/`, stop: () => server.kill() };
 }
 
-const vault =
-  values.vault ??
-  (
-    await run(
-      process.execPath,
-      [
-        join(root, 'e2e-tests/perf/wikipedia/make-vault.mjs'),
-        '--articles',
-        values.articles
-      ],
-      { capture: true }
-    )
-  ).trim();
+const vault = values.small
+  ? fileURLToPath(new URL('../fixtures/small-vault', import.meta.url))
+  : (values.vault ??
+    (
+      await run(
+        process.execPath,
+        [
+          join(root, 'e2e-tests/perf/wikipedia/make-vault.mjs'),
+          '--articles',
+          values.articles
+        ],
+        { capture: true }
+      )
+    ).trim());
+const query = values.query ?? (values.small ? 'lisbon' : 'europe');
 const server = values.url
   ? { url: values.url, stop: () => {} }
   : await startServer();
 
-const results = { vault: basename(vault), heapMB: {} };
+const results = {
+  vault: basename(vault),
+  query,
+  coldStart: [],
+  heapMB: {},
+  pssMB: {}
+};
+const save = () =>
+  values.json && writeFile(values.json, JSON.stringify(results, null, 2));
+
+// Times every storage request, and the graph layout worker's last update:
+// it stops posting once its layout has settled.
+function instrument() {
+  const Native = window.Worker;
+  window.__bench = { storage: [], layoutAt: 0, layoutMessages: 0 };
+  window.Worker = class extends Native {
+    constructor(url, options) {
+      super(url, options);
+      if (String(url).includes('graph-layout'))
+        this.addEventListener('message', () => {
+          window.__bench.layoutAt = performance.now();
+          window.__bench.layoutMessages++;
+        });
+      if (!String(url).includes('sqlite')) return;
+      const started = new Map();
+      const post = this.postMessage.bind(this);
+      this.postMessage = (message, transfer) => {
+        const what = message?.args?.command ?? message?.method;
+        started.set(message?.id, [what, performance.now()]);
+        return post(message, transfer);
+      };
+      this.addEventListener('message', ({ data }) => {
+        const entry = started.get(data?.id);
+        if (!entry) return;
+        started.delete(data.id);
+        const ms = Math.round(performance.now() - entry[1]);
+        if (ms > 100) window.__bench.storage.push(`${entry[0]} ${ms}`);
+        if (ms > 500) console.log(`[bench] storage ${entry[0]}: ${ms} ms`);
+      });
+    }
+  };
+}
+
 // A real profile on disk: an ephemeral context keeps OPFS in a small,
 // slower store, which a vault this size outgrows. Not in /tmp, which may be
 // memory.
 const cache = join(homedir(), '.cache', 'mindstream-perf');
 await mkdir(cache, { recursive: true });
 const profile = await mkdtemp(join(cache, 'profile-'));
-const browser = await chromium.launchPersistentContext(profile, {
-  headless: !values.headed,
-  args: ['--enable-precise-memory-info'],
-  viewport: { width: 1600, height: 1000 },
-  // Chromium reads picked file paths through the locale.
-  env: { ...process.env, LC_ALL: 'C.UTF-8' }
-});
-try {
-  const page = browser.pages()[0] ?? (await browser.newPage());
+
+async function start() {
+  // Chrome for Testing restores the last session's tabs, and a second tab
+  // of the app waits for the first to release the database.
+  await rm(join(profile, 'Default', 'Sessions'), {
+    recursive: true,
+    force: true
+  });
+  const app = await launch(
+    chromium.executablePath(),
+    [
+      `--user-data-dir=${profile}`,
+      ...(values.headed ? [] : ['--headless=new']),
+      '--no-first-run',
+      '--no-default-browser-check',
+      // Without it Chromium waits about 25 s for the system keyring.
+      '--password-store=basic',
+      '--enable-precise-memory-info',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-background-timer-throttling',
+      '--window-size=1600,1000',
+      'about:blank'
+    ],
+    { port: CDP_PORT, cdpClose: true }
+  );
+  const { page } = app;
+  await page.setViewportSize({ width: 1600, height: 1000 });
   page.on('pageerror', (error) => console.error('page error:', error.message));
   page.on('console', (message) => {
     if (message.text().startsWith('[bench]')) console.error(message.text());
   });
-  // Time every request to the storage worker; the slow ones say what the
-  // vault's size makes expensive.
-  await page.addInitScript(() => {
-    const Native = Worker;
-    window.Worker = class extends Native {
-      constructor(url, options) {
-        super(url, options);
-        if (!String(url).includes('sqlite')) return;
-        const started = new Map();
-        const post = this.postMessage.bind(this);
-        this.postMessage = (message, transfer) => {
-          const what = message?.args?.command ?? message?.method;
-          started.set(message?.id, [what, performance.now()]);
-          return post(message, transfer);
-        };
-        this.addEventListener('message', ({ data }) => {
-          const entry = started.get(data?.id);
-          if (!entry) return;
-          started.delete(data.id);
-          const ms = performance.now() - entry[1];
-          if (ms > 500)
-            console.log(`[bench] storage ${entry[0]}: ${Math.round(ms)} ms`);
-        });
-      }
-    };
-  });
+  await page.context().addInitScript(instrument);
   await page.goto(server.url);
+  return app;
+}
+
+const treeShows = (name) =>
+  [...document.querySelectorAll('aside *, [role="complementary"] *')].some(
+    (e) =>
+      e.childElementCount === 0 && e.textContent === name && e.checkVisibility()
+  );
+
+let app = await start();
+try {
+  let page = app.page;
   await page
     .getByRole('button', { name: 'Open settings' })
     .waitFor({ timeout: 120_000 });
 
-  const time = async (name, start, done) => {
+  // `done` runs in the page and is polled like the competitor benches poll.
+  const time = async (name, begin, done, timeout = STEP) => {
     const t0 = performance.now();
-    await start();
+    await begin();
     try {
-      await done();
+      results[name] = await until(page, done, null, { t0, timeout });
     } catch (error) {
       await diagnose(page, name);
       throw error;
     }
-    results[name] = Math.round(performance.now() - t0);
-    results.heapMB[name] = await page.evaluate(() =>
-      performance.memory
-        ? Math.round(performance.memory.usedJSHeapSize / 1048576)
-        : null
-    );
+    results.heapMB[name] = await heap(page);
     console.error(`${name}: ${results[name]} ms`);
-    if (values.json)
-      await writeFile(values.json, JSON.stringify(results, null, 2));
+    await save();
   };
 
   // Import.
@@ -199,47 +274,54 @@ try {
   await time(
     'import',
     () => dialog.getByRole('button', { name: 'Import', exact: true }).click(),
-    () => dialog.getByText('Import finished').waitFor({ timeout: LONG })
+    () =>
+      [...document.querySelectorAll('[role="alertdialog"]')].some((d) =>
+        d.textContent.includes('Import finished')
+      ),
+    LONG
   );
   results.importReport = (await dialog.innerText()).replace(/\s+/g, ' ').trim();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
+  await until(page, treeShows, basename(vault), { timeout: LONG });
+  await sleep(3000);
+  results.pssMB.afterImport = pssMB(app.proc.pid);
 
-  const folder = page
-    .getByRole('complementary')
-    .first()
-    .getByText(basename(vault), { exact: true })
-    .first();
-  await folder.waitFor({ timeout: LONG });
-
-  // Boot with the vault in place.
-  await time(
-    'boot',
-    () => page.reload(),
-    () => folder.waitFor({ timeout: LONG })
-  );
+  // Cold starts with the vault in place.
+  for (let i = 0; i < Number(values.runs); i++) {
+    await app.close();
+    app = await start();
+    results.coldStart.push(
+      await until(app.page, treeShows, basename(vault), {
+        t0: app.t0,
+        timeout: LONG
+      })
+    );
+    console.error(`coldStart: ${results.coldStart.at(-1)} ms`);
+  }
+  results.coldStartMedian = median(results.coldStart);
+  page = app.page;
+  await sleep(5000);
+  results.heapMB.idle = await heap(page);
+  results.pssMB.idle = pssMB(app.proc.pid);
+  await save();
 
   // Search, then open the first hit.
   await page.getByRole('button', { name: 'Search notes' }).first().click();
   const search = page.getByPlaceholder('Search notes');
   const hit = page.getByRole('dialog').locator('li button').first();
   await time(
-    'search',
-    () => search.fill('europe'),
-    () => hit.waitFor({ timeout: STEP })
+    'searchFirst',
+    () => search.fill(query),
+    () => !!document.querySelector('[role="dialog"] li button')
   );
   // Any editor on screen: the vault's first note may be open behind it.
   await time(
     'openNote',
     () => hit.click(),
     () =>
-      page.waitForFunction(
-        () =>
-          [...document.querySelectorAll('.ProseMirror')].some(
-            (e) => e.checkVisibility() && (e.textContent?.length ?? 0) > 200
-          ),
-        null,
-        { timeout: STEP }
+      [...document.querySelectorAll('.ProseMirror')].some(
+        (e) => e.checkVisibility() && (e.textContent?.length ?? 0) > 100
       )
   );
 
@@ -250,7 +332,10 @@ try {
     'localGraph',
     () =>
       sidebar.getByRole('button', { name: 'Local graph', exact: true }).click(),
-    () => localGraph.waitFor({ timeout: STEP })
+    () =>
+      !!document.querySelector(
+        'aside [data-graph-state="ready"], [role="complementary"] [data-graph-state="ready"]'
+      )
   );
   results.localGraphNodes = Number(
     await localGraph.getAttribute('data-graph-nodes')
@@ -259,22 +344,16 @@ try {
   // The whole vault in a tab, with the sidebar back on the file tree so only
   // one graph runs.
   const tabGraph = page.locator('.dv-groupview [data-graph-state="ready"]');
+  const opened = await page.evaluate(() => performance.now());
   await time(
     'graphTab',
     () => sidebar.getByRole('button', { name: 'Open graph view' }).click(),
-    async () => {
-      await tabGraph.waitFor({ timeout: STEP });
-      await page.waitForFunction(
-        () => {
-          const el = document.querySelector(
-            '.dv-groupview [data-graph-state="ready"]'
-          );
-          return Number(el?.getAttribute('data-graph-nodes')) > 0;
-        },
-        null,
-        { timeout: STEP }
-      );
-    }
+    () =>
+      Number(
+        document
+          .querySelector('.dv-groupview [data-graph-state="ready"]')
+          ?.getAttribute('data-graph-nodes')
+      ) > 0
   );
   await sidebar.getByRole('button', { name: 'Home', exact: true }).click();
   results.graphNodes = Number(await tabGraph.getAttribute('data-graph-nodes'));
@@ -291,31 +370,42 @@ try {
     await writeFile(values.profile, JSON.stringify(profile));
     printHotspots(profile);
   }
-  // Wheel events from inside the page, and only within the window: input
-  // sent through the browser waits for each frame, and a frame of a big
-  // graph rasterised in software can take seconds.
-  await tabGraph.evaluate((el) => {
-    const canvas = el.querySelector('canvas');
-    const { left, top, width, height } = canvas.getBoundingClientRect();
-    const end = performance.now() + 2000;
-    let sent = 0;
-    const timer = setInterval(() => {
-      if (performance.now() > end || sent === 20) return clearInterval(timer);
-      canvas.dispatchEvent(
-        new WheelEvent('wheel', {
-          deltaY: sent++ < 10 ? -120 : 120,
-          clientX: left + width / 2,
-          clientY: top + height / 2,
-          cancelable: true
-        })
-      );
-    }, 100);
-  });
+  await zoom(page, '.dv-groupview');
   results.graphZoomFrames = await frames(page, 2000);
+  results.pssMB.graph = pssMB(app.proc.pid);
+
+  // Settled: the layout worker has been quiet for a second.
+  const settledAt = await until(
+    page,
+    () =>
+      window.__bench.layoutMessages > 0 &&
+      performance.now() - window.__bench.layoutAt > 1000,
+    null,
+    { timeout: Number(values.settle) * 1000 }
+  )
+    .then(() => page.evaluate(() => window.__bench.layoutAt))
+    .catch(() => null);
+  results.graphSettled =
+    settledAt === null ? null : Math.round(settledAt - opened);
+  console.error(`graphSettled: ${results.graphSettled} ms`);
+  results.graphLateFrames = await frames(page, 5000);
+  await zoom(page, '.dv-groupview');
+  results.graphLateZoomFrames = await frames(page, 2000);
+  results.heapMB.graphLate = await heap(page);
+  results.pssMB.graphLate = pssMB(app.proc.pid);
+  results.slowStorage = await page.evaluate(() => window.__bench.storage);
 } finally {
-  await browser.close();
+  await app.close();
   server.stop();
   await rm(profile, { recursive: true, force: true });
+}
+
+function heap(page) {
+  return page.evaluate(() =>
+    performance.memory
+      ? Math.round(performance.memory.usedJSHeapSize / 1048576)
+      : null
+  );
 }
 
 /** What the page was doing when a step timed out: a screenshot and the
@@ -327,7 +417,7 @@ async function diagnose(page, step) {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Profiler.enable');
   await cdp.send('Profiler.start');
-  await new Promise((resolve) => setTimeout(resolve, 5000));
+  await sleep(5000);
   printHotspots((await cdp.send('Profiler.stop')).profile);
 }
 
@@ -347,42 +437,5 @@ function printHotspots(profile) {
     console.error(`  ${ms.toFixed(0).padStart(6)} ms  ${key}`);
 }
 
-/** Frame intervals and main-thread long tasks over `ms`. */
-function frames(page, ms) {
-  return page.evaluate(
-    (ms) =>
-      new Promise((resolve) => {
-        const intervals = [];
-        let longTasks = 0;
-        const observer = new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) longTasks += entry.duration;
-        });
-        observer.observe({ type: 'longtask', buffered: false });
-        let last = performance.now();
-        const end = last + ms;
-        const step = (now) => {
-          intervals.push(now - last);
-          last = now;
-          if (now < end) requestAnimationFrame(step);
-          else {
-            observer.disconnect();
-            intervals.sort((a, b) => a - b);
-            const at = (q) =>
-              Math.round(intervals[Math.floor(q * (intervals.length - 1))]);
-            resolve({
-              fps: Math.round((intervals.length / ms) * 1000),
-              p50: at(0.5),
-              p95: at(0.95),
-              max: Math.round(intervals[intervals.length - 1]),
-              longTaskMs: Math.round(longTasks)
-            });
-          }
-        };
-        requestAnimationFrame(step);
-      }),
-    ms
-  );
-}
-
 console.log(JSON.stringify(results, null, 2));
-if (values.json) await writeFile(values.json, JSON.stringify(results, null, 2));
+await save();

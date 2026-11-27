@@ -1,0 +1,250 @@
+/**
+ * Measuring helpers shared by the large-vault bench and the competitor
+ * benches, so every app is timed the same way.
+ */
+import { spawn } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { chromium } from '@playwright/test';
+
+export { chromium };
+
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) / 2)];
+}
+
+/** `pid` and all its descendants, read from /proc. */
+function processTree(pid) {
+  const children = new Map();
+  for (const name of readdirSync('/proc')) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
+      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid).push(Number(name));
+    } catch {
+      // The process exited while we looked.
+    }
+  }
+  const out = [];
+  const walk = (p) => {
+    out.push(p);
+    for (const child of children.get(p) ?? []) walk(child);
+  };
+  walk(pid);
+  return out;
+}
+
+/**
+ * Proportional set size of a process tree in MiB: pages shared between the
+ * processes are split between them, so a Chromium or Electron app's many
+ * processes add up to what the app costs. Linux only; null elsewhere.
+ */
+export function pssMB(pid) {
+  if (process.platform !== 'linux') return null;
+  let kb = 0;
+  for (const p of processTree(pid)) {
+    try {
+      const rollup = readFileSync(`/proc/${p}/smaps_rollup`, 'utf8');
+      kb += Number(rollup.match(/^Pss:\s+(\d+)/m)?.[1] ?? 0);
+    } catch {
+      // The process exited while we looked.
+    }
+  }
+  return Math.round(kb / 1024);
+}
+
+/**
+ * Evaluates `fn` in the page every 50 ms until it returns something truthy,
+ * and returns the milliseconds since `t0`. Each probe waits behind the
+ * page's current task, so this is when the page could first answer, not
+ * just when the DOM changed.
+ */
+export async function until(
+  page,
+  fn,
+  arg,
+  { t0 = performance.now(), timeout = 30 * 60_000, every = 50 } = {}
+) {
+  const end = performance.now() + timeout;
+  for (;;) {
+    if (await page.evaluate(fn, arg).catch(() => false))
+      return Math.round(performance.now() - t0);
+    if (performance.now() > end)
+      throw new Error(`timed out waiting for ${String(fn).slice(0, 120)}`);
+    await sleep(every);
+  }
+}
+
+/** Frame intervals and main-thread long tasks over `ms`. */
+export function frames(page, ms) {
+  return page.evaluate(
+    (ms) =>
+      new Promise((resolve) => {
+        const intervals = [];
+        let longTasks = 0;
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) longTasks += entry.duration;
+        });
+        observer.observe({ type: 'longtask', buffered: false });
+        const start = performance.now();
+        let last = start;
+        const step = (now) => {
+          intervals.push(now - last);
+          last = now;
+          if (now < start + ms) requestAnimationFrame(step);
+          else {
+            observer.disconnect();
+            intervals.sort((a, b) => a - b);
+            const at = (q) =>
+              Math.round(intervals[Math.floor(q * (intervals.length - 1))]);
+            resolve({
+              fps: Math.round((intervals.length / (now - start)) * 1000),
+              p50: at(0.5),
+              p95: at(0.95),
+              max: Math.round(intervals[intervals.length - 1]),
+              longTaskMs: Math.round(longTasks)
+            });
+          }
+        };
+        requestAnimationFrame(step);
+      }),
+    ms
+  );
+}
+
+/**
+ * Ten wheel steps in, then ten out, over two seconds, on the biggest canvas
+ * under `selector`. Dispatched from inside the page: input sent through the
+ * browser waits for each frame, and a frame of a big graph rasterised in
+ * software can take seconds. Measure with `frames` right after.
+ */
+export function zoom(page, selector) {
+  return page.evaluate((selector) => {
+    const canvas = [...document.querySelectorAll(`${selector} canvas`)].sort(
+      (a, b) => b.width * b.height - a.width * a.height
+    )[0];
+    const { left, top, width, height } = canvas.getBoundingClientRect();
+    const end = performance.now() + 2000;
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (performance.now() > end || sent === 20) return clearInterval(timer);
+      canvas.dispatchEvent(
+        new WheelEvent('wheel', {
+          deltaY: sent++ < 10 ? -120 : 120,
+          clientX: left + width / 2,
+          clientY: top + height / 2,
+          bubbles: true,
+          cancelable: true
+        })
+      );
+    }, 100);
+  }, selector);
+}
+
+/** Resolves once `proc` and, on Linux, everything it started have exited. */
+async function exited(proc) {
+  if (process.platform !== 'linux') {
+    if (proc.exitCode === null && proc.signalCode === null)
+      await new Promise((r) => proc.once('exit', r));
+    return;
+  }
+  const pids = processTree(proc.pid);
+  const alive = () =>
+    pids.filter((p) => {
+      try {
+        process.kill(p, 0);
+        return !readFileSync(`/proc/${p}/stat`, 'utf8').includes(') Z ');
+      } catch {
+        return false;
+      }
+    });
+  const t0 = performance.now();
+  while (alive().length) {
+    const waited = performance.now() - t0;
+    if (waited > 15_000)
+      for (const p of alive()) {
+        try {
+          process.kill(p, waited > 25_000 ? 'SIGKILL' : 'SIGTERM');
+        } catch {
+          // Already gone.
+        }
+      }
+    await sleep(100);
+  }
+}
+
+/**
+ * Starts a Chromium-based app (Chromium itself or an Electron app) with the
+ * DevTools protocol on `port`, and resolves with the first window for which
+ * `pick` returns true. `t0` is taken before the process starts, so it times
+ * a cold start the way a user sees one.
+ *
+ * `close` asks Chromium to quit over the protocol when `cdpClose` is set,
+ * since Chrome for Testing restores the last session's tabs after a
+ * SIGTERM. Electron apps get a SIGTERM after the protocol disconnects:
+ * Obsidian answers it with a beforeunload dialog that Playwright would
+ * otherwise try to handle on a closing page.
+ */
+export async function launch(
+  bin,
+  args,
+  { env = {}, port, pick = async () => true, cdpClose = false }
+) {
+  const t0 = performance.now();
+  const proc = spawn(
+    bin,
+    ['--no-sandbox', `--remote-debugging-port=${port}`, ...args],
+    {
+      env: { ...process.env, LC_ALL: 'C.UTF-8', ...env },
+      stdio: ['ignore', 'ignore', 'pipe']
+    }
+  );
+  let stderr = '';
+  proc.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-4000)));
+  let browser;
+  while (!browser) {
+    if (proc.exitCode !== null)
+      throw new Error(`${bin} exited with ${proc.exitCode}: ${stderr}`);
+    if (performance.now() - t0 > 120_000)
+      throw new Error(`${bin} opened no DevTools port`);
+    browser = await chromium
+      .connectOverCDP(`http://127.0.0.1:${port}`)
+      .catch(() => null);
+    if (!browser) await sleep(50);
+  }
+  let page;
+  while (!page) {
+    for (const context of browser.contexts())
+      for (const candidate of context.pages())
+        if (
+          !candidate.url().startsWith('devtools') &&
+          (await pick(candidate).catch(() => false))
+        )
+          page = candidate;
+    if (!page) await sleep(50);
+    if (performance.now() - t0 > 120_000) throw new Error(`${bin}: no window`);
+  }
+  return {
+    proc,
+    browser,
+    page,
+    t0,
+    async close() {
+      if (cdpClose)
+        // The reply may never come: the socket closes first.
+        browser
+          .newBrowserCDPSession()
+          .then((cdp) => cdp.send('Browser.close'))
+          .catch(() => {});
+      else {
+        await browser.close().catch(() => {});
+        proc.kill('SIGTERM');
+      }
+      await exited(proc);
+    }
+  };
+}

@@ -1,0 +1,4 @@
+- [ ] Documents
+- [ ] Chargers
+- [ ] Toiletries
+- [ ] Medication

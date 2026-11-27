@@ -23,3 +23,6 @@ crates/**/Cargo.lock
 
 # Third-party code kept in the repository, formatted as its authors left it
 vendor/
+
+# Benchmark vault: every app must read the same bytes
+**/e2e-tests/perf/fixtures/
