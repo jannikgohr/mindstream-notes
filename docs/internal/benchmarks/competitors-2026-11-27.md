@@ -74,8 +74,9 @@ Mindstream's search includes its 100 ms debounce.
 - **Local graph:** the first open loads every link in the vault
   (`loadNoteLinks` in `src/lib/notes/note-relations.ts`): 640 ms in
   `list_note_links`, the rest on the main thread.
-- **Zoom:** not profiled yet. Long tasks fill 1.9–3.5 s of every 2 s zoom
-  window, settled or not.
+- **Zoom:** not profiled yet. Long tasks took 1.9–3.5 s of each zoom
+  sample, settled or not. A sample is two seconds long but ends on the next
+  frame, which a stall delays.
 - **Import:** not profiled yet.
 
 ## Caveats
