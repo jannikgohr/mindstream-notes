@@ -1276,6 +1276,7 @@
     "account.server.invalidUrl": "Not a valid URL",
     "account.server.badScheme": "URL must use http:// or https:// (got {scheme})",
     "account.server.noHost": "URL must include a hostname",
+    "account.server.httpsRequired": "Plain http:// only works for localhost, .local, .lan or a private network address. Use https://.",
     "account.server.checking": "Checking…",
     "account.server.replied": "Server is healthy and compatible at {url}",
     "account.server.unhealthy": "Health check returned HTTP {status} at {url}",
