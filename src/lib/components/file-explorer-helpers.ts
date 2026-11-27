@@ -1,7 +1,10 @@
 import { Home, Share2, Star, Trash2 } from '@lucide/svelte';
 import type { NoteKind, TreeNode } from '$lib/api';
 import type { IconComponent } from '$lib/settings/icons';
-import type { DesktopNoteSource } from '$lib/stores/note-source.svelte';
+import {
+  collectionIsUnder,
+  type DesktopNoteSource
+} from '$lib/stores/note-source.svelte';
 import { tUi } from '$lib/settings/i18n.svelte';
 
 export type DraftKind = 'note' | 'folder' | 'drawing' | 'ink' | 'kanban';
@@ -229,6 +232,32 @@ export function dragItemsForStart(
   if (!selectedKeys.includes(key)) return [item];
   const items = selectedItemsFromKeys(selectedKeys);
   return items.length > 0 ? items : [item];
+}
+
+type Parented = Record<string, { parent_collection_id: string | null }>;
+
+export type TreeDropEffect = 'move' | 'unchanged' | 'into-itself';
+
+/** What dropping `items` into `targetFolderId` (null: the root) would do. */
+export function treeDropEffect(
+  items: TreeItemRef[],
+  targetFolderId: string | null,
+  notesById: Parented,
+  collectionsById: Parented
+): TreeDropEffect {
+  let moves = false;
+  for (const item of items) {
+    if (
+      item.kind === 'folder' &&
+      collectionIsUnder(targetFolderId, item.id, collectionsById)
+    ) {
+      return 'into-itself';
+    }
+    const byId = item.kind === 'note' ? notesById : collectionsById;
+    const parent = byId[item.id]?.parent_collection_id ?? null;
+    if (parent !== targetFolderId) moves = true;
+  }
+  return moves ? 'move' : 'unchanged';
 }
 
 function parseTreeItemRef(value: unknown): TreeItemRef | null {

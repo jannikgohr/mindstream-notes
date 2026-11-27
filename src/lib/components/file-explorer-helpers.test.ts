@@ -14,10 +14,12 @@ import {
   selectionKeyForItem,
   selectionRange,
   toggleSelection,
+  treeDropEffect,
   updateSelectionForClick,
   visibleSelectionKeys,
   type DraftKind,
-  type SelectionKey
+  type SelectionKey,
+  type TreeItemRef
 } from './file-explorer-helpers';
 import type { TreeNode } from '$lib/api';
 
@@ -419,5 +421,53 @@ describe('dragPayloadFromTransfer', () => {
     for (const k of kinds) {
       expect(typeof defaultDraftText(k)).toBe('string');
     }
+  });
+});
+
+describe('treeDropEffect', () => {
+  // a/ ─ b/ ─ n2
+  // n1 at the root, n3 in a/
+  const collections = {
+    a: { parent_collection_id: null },
+    b: { parent_collection_id: 'a' }
+  };
+  const notes = {
+    n1: { parent_collection_id: null },
+    n2: { parent_collection_id: 'b' },
+    n3: { parent_collection_id: 'a' }
+  };
+  const effect = (items: TreeItemRef[], target: string | null) =>
+    treeDropEffect(items, target, notes, collections);
+
+  it('leaves items where they already are', () => {
+    expect(effect([{ kind: 'note', id: 'n1' }], null)).toBe('unchanged');
+    expect(effect([{ kind: 'folder', id: 'b' }], 'a')).toBe('unchanged');
+  });
+
+  it('moves when any item changes folder', () => {
+    expect(effect([{ kind: 'note', id: 'n2' }], null)).toBe('move');
+    expect(
+      effect(
+        [
+          { kind: 'note', id: 'n3' },
+          { kind: 'note', id: 'n2' }
+        ],
+        'a'
+      )
+    ).toBe('move');
+  });
+
+  it('refuses a folder dropped into itself or below itself', () => {
+    expect(effect([{ kind: 'folder', id: 'a' }], 'a')).toBe('into-itself');
+    expect(effect([{ kind: 'folder', id: 'a' }], 'b')).toBe('into-itself');
+    expect(
+      effect(
+        [
+          { kind: 'note', id: 'n1' },
+          { kind: 'folder', id: 'a' }
+        ],
+        'b'
+      )
+    ).toBe('into-itself');
   });
 });
