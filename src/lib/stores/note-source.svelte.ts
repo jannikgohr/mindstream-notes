@@ -44,7 +44,7 @@ export function childrenOf(
 export function collectionIsUnder(
   collectionId: string | null,
   ancestorId: string,
-  collectionsById: Record<string, Collection>
+  collectionsById: Record<string, Pick<Collection, 'parent_collection_id'>>
 ): boolean {
   let current = collectionId;
   const seen = new Set<string>();
