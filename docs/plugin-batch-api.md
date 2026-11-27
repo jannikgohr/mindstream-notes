@@ -8,12 +8,13 @@ shows the crossings cost more than building the plan.
 
 ## The general batch contract
 
-`mindstream:plugin/batch.execute` accepts a typed list of commands over all
-17 existing operations: logging, UUID/random bytes/permission inspection,
-clock reads/add/format, frontmatter, notes all/get, storage read/list/write/
-delete, and native tool available/run. Each dispatch delegates to the same
-`HostContext` method as the scalar API. No permission is granted by using a
-batch. Note writes remain declarative effects outside this host API.
+`mindstream:plugin/batch.execute` accepts a typed list of commands over 17
+operations: logging, UUID/random bytes/permission inspection, clock
+reads/add/format, frontmatter, notes all/get, storage read/list/write/delete,
+and native tool available/run. `notes.query` and `notes.countByDay` cannot be
+batched. Each command behaves exactly like the scalar call, and using a batch
+grants no permission. Note writes remain declarative effects outside this host
+API.
 
 - Execution is sequential in command order, not parallel.
 - Literal text and backward references to earlier text/optional-text results
@@ -35,18 +36,12 @@ batch. Note writes remain declarative effects outside this host API.
 - Limits are 128 commands, 1,024 text arguments, 1 MiB literal request bytes
   and 8 MiB accounted cumulative result data, including unkept results.
   Existing per-operation caps still apply. The result accounting includes
-  conservative record overhead; it is not a total host RSS limit. These checks
-  occur after the canonical ABI lifts arguments. During lifting, Wasmtime
-  applies a separate 9 MiB argument-copy budget per host call, including
-  container overhead. It resets on each host call and cannot be raised by the
-  plugin. This bounds copies of aliased guest strings before the batch
-  validator receives its owned values. It is separate from guest linear memory
-  and total host RSS.
-- Exhausting the argument-copy budget traps the invocation before the batch
-  handler runs, with no batch failure or progress record. Earlier host calls
-  can still have effects. Requests that fit lifting but exceed a batch limit
-  return the ordinary batch failure. Host-to-guest results are outside the
-  argument-copy budget; the batch result cap and guest memory cap still apply.
+  conservative record overhead; it is not a total host RSS limit.
+- These limits are checked after the arguments are copied out of guest memory.
+  A request over the per-call
+  [9 MiB argument-copy budget](plugin-development.md#runtime-limits) traps the
+  invocation before the batch runs, with no failure record; a request within
+  it that breaks a batch limit gets the ordinary validation failure.
 
 If the guest must inspect a result to choose its next action, it executes one
 plan and then builds another. This API batches known operations; it is not a
@@ -89,8 +84,6 @@ This example needs the `pluginStorage.read`, `pluginStorage.write` and
 `notes.read` permissions. The frontmatter
 result feeds a storage write without a guest round trip; only replies 2 and 3
 are returned. Use a separate plan for any guest decision based on those values.
-The SDK test host mirrors the transport but still does not model execution
-budgets; real runtime tests/probes cover that behaviour.
 
 ## Recovering after a batch error
 
@@ -141,17 +134,12 @@ for recovery across those interruptions; this transport does not provide them.
 
 ## Compatibility
 
-Scalar APIs remain available. A newly built component importing `batch`
-requires a host that supplies that interface; it cannot run on an older app
-merely because the scalar APIs exist. There is no capability or
+A component that imports `batch` needs a host that supplies it; the scalar
+APIs being present on an older app is not enough. There is no capability or
 version discovery yet, and a later change to a variant shape can break ABI
-compatibility.
+compatibility. Components built against an earlier batch failure record must
+be rebuilt with the current WIT. Scalar-only components are unaffected.
 
-The recovery fields extend the experimental failure record incompatibly with
-the original batch-importing component. Rebuild those guests with the matching
-WIT and host. Scalar-only components retain their original interfaces.
-
-Use explicit batches for measured patterns with enough crossing/copy cost to
-outweigh plan overhead. Keep simple calls simple. Why fewer crossings can still
-take longer, and which host capabilities may come next, is in the
-[host API design notes](internal/plugin-host-api-design.md).
+Batch only patterns where measurement shows the crossings cost more than the
+plan. Why fewer crossings can still take longer is in the
+[host API design notes](internal/plugin-host-api-design.md#why-fewer-crossings-can-take-longer).

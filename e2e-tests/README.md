@@ -1,16 +1,24 @@
 # Running the end-to-end tests
 
-Three suites live here. The browser suite runs by default. CI also builds the
-packaged Linux app and runs native tests: single-client tests on ready code
-PRs, and collaboration tests when the change filter selects them. A manual
-Test workflow run or the `ci:app-e2e` PR label enables all suites.
+The browser suite runs by default. CI also builds the packaged Linux app and
+runs native tests: single-client tests on ready code PRs, collaboration tests
+when the change filter selects them. A manual Test workflow run or the
+`ci:app-e2e` PR label enables all suites.
 
 | Suite                  | Command                   | Needs                             |
 | ---------------------- | ------------------------- | --------------------------------- |
-| `browser/` (T2)        | `pnpm test:e2e`           | Node only — runs in CI            |
+| `browser/` (T2)        | `pnpm test:e2e`           | Node only                         |
 | `backend/` (health)    | `pnpm test:e2e:backend`   | the test backend stack up         |
 | `app/` single (T3)     | `pnpm test:e2e:app`       | the `tauri-driver` toolchain      |
 | `app/` two-client (T4) | `pnpm test:e2e:app:multi` | the toolchain **+** backend stack |
+| `sqlite/`              | `pnpm test:sqlite`        | the Wasm toolchain                |
+| `qa/`                  | `pnpm test:qa`            | the Wasm toolchain                |
+| `demo/`                | `pnpm test:demo`          | a `pnpm build:demo` build         |
+
+`sqlite/` and `qa/` test the browser build's real SQLite storage and run in
+the `browser-sqlite.yml` workflow; `demo/` tests the GitHub Pages build. See
+[browser support](../docs/internal/browser-support.md) for all three. `perf/`
+holds the benchmarks below.
 
 ## Prerequisites
 
@@ -34,8 +42,7 @@ pnpm test:e2e:ui       # interactive Playwright runner
 pnpm test:e2e:dialogs  # importer lifecycle in Chromium and WebKit, no retries
 ```
 
-Dialog tests use production assets and retain traces and screenshots on
-failure. They cover configuration focus, keyboard trapping, failure/retry,
+Dialog tests use production assets. They cover configuration focus, keyboard trapping, failure/retry,
 Stop, immediate completion, and automatic return to Settings. Native IPC is
 stubbed in these browser tests; the packaged-app suite verifies real data.
 See [Bits UI maintenance](../docs/internal/bits-ui.md) before changing the dialog library
@@ -86,8 +93,8 @@ Set `MINDSTREAM_E2E_BACKEND_URL` only to point at a different stack. If T4 specs
 start timing out or behaving oddly, reset the stack (`pnpm backend:test:reset`)
 — accumulated data slows sync enough to mimic real bugs.
 
-See [app/README.md](app/README.md) for the two-client harness specifics and the
-full env-flag reference in [docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md).
+The two-client harness and the full env-flag reference are in
+[docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md).
 
 ## Backend benchmark
 
@@ -128,7 +135,7 @@ the machine than the app; `--profile` separates the app's own time from it.
 
 ## Going deeper
 
-- **Why these tiers exist / what each proves** — [docs/internal/e2e/strategy.md](../docs/internal/e2e/strategy.md)
-- **The flows worth covering (catalogue)** — [docs/internal/e2e/flows.md](../docs/internal/e2e/flows.md)
-- **Current coverage & open gaps** — [docs/internal/e2e/status.md](../docs/internal/e2e/status.md)
+- **The tiers and when to use each** — [docs/internal/e2e/strategy.md](../docs/internal/e2e/strategy.md)
+- **The flows, and which spec covers each** — [docs/internal/e2e/flows.md](../docs/internal/e2e/flows.md)
+- **Toolchain, env flags, seams and gotchas** — [docs/internal/e2e/harness.md](../docs/internal/e2e/harness.md)
 - **By-design behaviours these tests pin down** — [docs/internal/limitations.md](../docs/internal/limitations.md)

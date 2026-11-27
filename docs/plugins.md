@@ -2,8 +2,7 @@
 
 Plugins add features to Mindstream Notes: new kinds of note, export formats,
 toolbar buttons, sidebar views, and spelling and grammar checkers. Five come
-with the app,
-and you can install others from a folder. To write your own, see
+with the app, and you can install others from a folder. To write your own, see
 [Writing plugins](plugin-development.md).
 
 ## Core and third-party plugins
@@ -57,8 +56,8 @@ to approve it again, even when the files are identical.
 
 ## The plugins that come with the app
 
-The browser version has Graph, Journal, Templates and Typst. LanguageTool and plugins you
-install need the app.
+The browser version has Graph, Journal, Templates and Typst. LanguageTool and
+plugins you install need the app.
 
 ### Graph
 
@@ -102,8 +101,7 @@ Adds Typst documents: Typst source with a preview beside it, exported as PDF,
 PNG or SVG. The preview and those exports need the `typst` program on your
 computer, and the live preview with click-to-source also needs `tinymist`.
 Without them, as on Android or in a browser, a Typst document stays editable
-as source, and
-exporting the source still works. The plugin's documentation says what to
+as source, and exporting the source still works. The plugin's documentation says what to
 install.
 
 ### LanguageTool

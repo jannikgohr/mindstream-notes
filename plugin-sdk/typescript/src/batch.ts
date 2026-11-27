@@ -24,7 +24,8 @@ export class HostBatchError extends Error {
   }
 }
 
-/** Explicit ordered plan over all current host capabilities, at most 128 commands.
+/** Explicit ordered plan over the scalar host calls except notes.query and
+ * notes.countByDay, at most 128 commands.
  * Reference earlier text results with previous(index), including unkept results.
  * A result needed for guest branching requires execute followed by another plan.
  * Deadline/cancellation traps remain fatal, rather than HostBatchError values.

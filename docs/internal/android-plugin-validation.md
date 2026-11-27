@@ -1,40 +1,24 @@
-# Android plugin validation handoff
+# Android plugin validation
 
-Validate the current Wasm-only plugin host on a physical Android device.
-This work can run alongside Linux desktop validation for
-[PR #115](https://github.com/jannikgohr/mindstream-notes/pull/115).
+How to validate the Wasm plugin host on a physical Android device. The last run
+is the [24 October 2026 report](benchmarks/android-plugin-validation-2026-10-24.md).
+The document save it found broken is fixed; the signed call latency it measured
+is [issue #116](https://github.com/jannikgohr/mindstream-notes/issues/116).
+Rerun the measurements below to close that issue.
 
 ## Revision and scope
 
-Fetch `origin/feat/wasm-plugin` into a separate checkout. The code revision to
-include is `b453278b943758d3ffbe0f43a1e826d78b264a0b`, which aligns SDK and
-frontend entry validation with the Rust host by rejecting any `..` in the
-component entry. The handoff itself is a later documentation commit. Record
-the exact tested SHA and artifact SHA-256 hashes in every result.
+Test from a separate checkout and branch, and record the exact tested SHA and
+artifact SHA-256 hashes in every result. Use a disposable profile or app ID for
+lifecycle and cancellation tests.
 
 ```sh
-git fetch origin feat/wasm-plugin
-git switch -c tests/android-plugin-validation origin/feat/wasm-plugin
-git merge-base --is-ancestor b453278b943758d3ffbe0f43a1e826d78b264a0b HEAD
 git rev-parse HEAD
 pnpm install --frozen-lockfile
 rustup target add wasm32-unknown-unknown aarch64-linux-android
 ```
 
-Keep device test changes on that branch and return their commits for integration.
-Do not push directly to `feat/wasm-plugin` while desktop work is in progress.
-Use a disposable profile or app ID for lifecycle and cancellation tests.
-
-Changes since the earlier device evidence include the 9 MiB host argument
-transfer limit, verified-entry enforcement, the host batch API and recovery
-record, Templates action visibility, Typst source/image exports, LanguageTool
-manifest v2, source-built test fixtures, and complete Luau removal. Version 1
-manifests and `runtime: "luau"` now fail validation intentionally.
-
-The earlier physical device was a Samsung SM-T733, Android 14/API 34, ARM64.
-Its results are historical context, not validation of this revision. The old
-migration reports can be read with `git show 5b52c403:docs/wasm-plugin-migration.md`.
-Their evidence links point to files archived outside this checkout.
+Version 1 manifests and `runtime: "luau"` fail validation on purpose.
 
 ## Environment and runtime checks
 
@@ -128,7 +112,7 @@ signed plugin package across platforms where possible.
   that altered package bytes require approval and never replace an active
   call's verified snapshot with bytes reopened from disk.
 
-## Measurements still due
+## Measurements
 
 Measure normal release builds under controlled, recorded device conditions.
 Separate cold compilation, cache loading, instantiation, guest execution and
@@ -138,8 +122,9 @@ first export; do not label that call cold compilation without checking.
 1. Measure cold and warm startup to an interactive app, not just Activity first
    draw. Record the readiness action and sample count, with p50/p95/max.
 2. Measure trivial cached calls and real Templates render/menu calls through
-   app IPC. The historical render p95 was 11.4 ms against a target below 5 ms;
-   standalone guest timing does not close the application-level gap.
+   app IPC. The goal is a p95 below 10 ms for frequent calls, which signed
+   third-party calls missed at 68.8 ms; standalone guest timing does not close
+   the application-level gap.
 3. Record guest linear memory separately from whole-app RSS/PSS and high-water
    memory. Take idle, post-compilation, repeated-call and post-idle checkpoints.
    Include at least 1,000 calls and a longer idle/repeated-use soak, stating the
@@ -149,7 +134,8 @@ first export; do not label that call cold compilation without checking.
    matching pre-migration build at `2bdba0b4`. Match frontend, profile, ABI,
    features, signing/packaging and shared startup fixes. Record any necessary
    baseline patches. The old stub-frontend binary is not a valid normal-app
-   size baseline. The historical added-size target was 15,000,000 bytes.
+   size baseline. The added-size budget is 15,000,000 bytes; the last run
+   stayed well inside it.
 5. Repeat representative workloads with stable charge/thermal state. Another
    physical device or ARMv7 CPU adds coverage; explicitly mark unavailable
    devices and ABIs as untested. The 32 MiB guest default also needs evidence
@@ -160,8 +146,3 @@ raw logs, screenshots for visible assertions, and a pass/fail/unmeasured table.
 Keep bulky evidence out of Git and provide its location plus checksums. Commit
 small reports or test fixes on the separate test branch. Report failures without
 raising production budgets or removing assertions to make the run pass.
-
-## Recorded results
-
-See the [24 October 2026 physical Android report](benchmarks/android-plugin-validation-2026-10-24.md)
-for the tested revision, commands, artifacts, failures and remaining gates.

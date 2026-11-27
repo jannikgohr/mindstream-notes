@@ -91,14 +91,15 @@ really has unpushed content is checked with `yrs_doc::contains_state`, because
 a server switch marks every row dirty (`auth::reset_sync_cursors`).
 
 When two devices both edited a note offline, neither rendering matches the
-merged document, and `body` stays behind until an editor saves the note. In
-November 2026 a lagging body lost a note's GIF: a device that signed in to a
-new server second pushed a weeks-old rendering, and its attachment sweep freed
-an image the merged document still showed. Since then, anything that decides
-whether an attachment is in use also reads the live Yjs content
-(`yrs_doc::live_strings`), and a remote delete of an attachment a note still
-shows is refused. The details are under "A note's rendered body can lag its
-content" in [known limitations](limitations.md).
+merged document, and `body` stays behind until an editor saves the note. The
+editor itself shows the merged content. [limitations.md](limitations.md) lists
+this as a known limitation.
+
+A lagging `body` must never decide that an attachment is unused. Anything that
+does also reads the live Yjs content (`yrs_doc::live_strings`), and a remote
+delete of an attachment a note still shows is refused (`note_still_drawing` in
+`src-tauri/src/sync/claim.rs`). Without both, a device pushing an old rendering
+can free an image the merged document still shows.
 
 ## Other Milkdown instances
 

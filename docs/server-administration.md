@@ -5,9 +5,13 @@ security, storage limits, backups and upgrades. To set one up, follow the
 [self-hosting quick start](self-hosting.md). Every setting is listed in
 [Server configuration](server-configuration.md).
 
-The commands below run from `backend/server` against the compose stack. The
-server binary manages accounts too, and needs the database variable and nothing
-else.
+Run the commands below from `backend/server` on the host. `docker compose exec`
+runs the binary inside the server container, where its settings are. The
+account and signup-code commands bring the database schema up to date, open
+`MINDSTREAM_BLOB_DIR` and load the secret key, creating the blob directory and
+the key when they are missing. Run outside the container with only the database
+address, they use the wrong blob directory, and `user delete` leaves the
+account's files on disk.
 
 ## Accounts
 
@@ -73,9 +77,8 @@ all work. Setting it up returns ten single-use backup codes.
 The authenticator secrets are the one thing the server stores that it can read
 back, because checking a code takes the secret itself. They are sealed under a
 key that is kept outside the database. Give it as `MINDSTREAM_SECRET_KEY`, 32
-bytes as URL-safe base64, or let the server create one on first start in
-`MINDSTREAM_SECRET_KEY_FILE`, which defaults to `secret.key` in the blob
-directory.
+bytes as URL-safe base64, or let the server create one on first start; see
+[What is on disk](server-configuration.md#what-is-on-disk) for where.
 
 Back that key up. Without it every authenticator set up so far stops working and
 each of those accounts needs the reset below. Keep its backup apart from the
@@ -92,18 +95,9 @@ docker compose exec server mindstream-server user reset-2fa <username>
 Signing in then takes the password alone. Be sure the person asking owns the
 account before you run it.
 
-An account can also have a recovery key, which sets a new password when the old
-one is forgotten. The server never sees it. It stores a public key and a second
-copy of the account's keys that only the recovery key opens, and a reset with it
-still asks for the code when the account has an authenticator. Without a
-recovery key or a signed-in device, a forgotten password means the data on the
-server cannot be read by anyone.
-
-Each device that signs in gets its own session, which the user can list and end.
-A new password or a new authenticator signs every other device out. A session
-that no device has used for `MINDSTREAM_SESSION_IDLE_DAYS` ends by itself, so a
-device that was put away or lost does not stay signed in for ever. A device that
-is running syncs, and that counts as use.
+A session that no device has used for `MINDSTREAM_SESSION_IDLE_DAYS` ends by
+itself, so a device that was put away or lost does not stay signed in for ever.
+A device that is running syncs, and that counts as use.
 
 ## Limits
 
@@ -138,13 +132,9 @@ The app keeps what was refused on the device and sends it once there is room.
 Until then it shows a notice that names the limit, and in a shared folder the
 owner whose plan it is.
 
-Storage that is no longer needed is given back. An item keeps its current
-revision and the `MINDSTREAM_KEEP_REVISIONS` before it. Older revisions go when
-a new one arrives, and a deleted item keeps only the record that it was deleted.
-Content goes with the last revision that used it, from the database or the blob
-directory, and stops counting against the owner at that moment. The exception
-for deletions covers deletions only: a write that calls itself one and carries
-content is held to the limits like any other.
+An item keeps its current revision and the `MINDSTREAM_KEEP_REVISIONS` before
+it, and a deleted item keeps only the record that it was deleted. What goes
+stops counting against the owner straight away.
 
 ### From another program
 
@@ -168,9 +158,10 @@ stores. Keep it off the public internet all the same, by not routing `/admin/`
 through the reverse proxy.
 
 `MINDSTREAM_ADMIN_TOKEN` should be long and random (32 bytes from a generator,
-base64-encoded); the admin interface answers unlimited guessing with nothing but
-time, so entropy is the whole of its protection. Keep a copy where the billing
-system reads it, and nowhere else.
+base64-encoded). Requests to the admin interface count against the sign-in limit
+of the address they come from, and nothing else slows down guessing, so with
+`MINDSTREAM_AUTH_RATE_PER_MINUTE=0` the token's length is all that protects it.
+Keep a copy where the billing system reads it, and nowhere else.
 
 The app reads the signed-in account's usage from `GET /api/v1/mindstream/usage/`.
 
@@ -198,15 +189,13 @@ The steps are in the
 
 Changes that need you to act before an upgrade are listed here, newest first.
 
-**After 0.2.0.** Storage now counts keys, names and references besides content,
-so the first start recounts every collection and accounts show a little more in
-use. An account close to its limit may end up over it. Nothing is removed, but
-only deletions go through until there is room, so raise the limit first if that
-matters. Accounts without limits are not affected.
-
-Signing in no longer says that a username does not exist, so a mistyped name
-reads as a wrong password. App versions before this one show "Wrong password."
-for it, and a login that was under way during the upgrade has to start again.
+**Coming from a server older than 0.3.0.** Storage counts keys, names and
+references besides content, so the first start recounts every collection and
+accounts show a little more in use. An account close to its limit may end up
+over it. Nothing is removed, but only deletions go through until there is room,
+so raise the limit first if that matters. Accounts without limits are not
+affected. Signing in no longer says that a username does not exist, so app
+versions before 0.3.0 show "Wrong password." for a mistyped name.
 
 ## Threat model notes
 
@@ -217,13 +206,7 @@ What the server deliberately does not defend, so nobody is surprised:
   invitations, at 30 names a minute and with 20 names that turn out to be nobody's
   a day by default. Usernames appear in sharing dialogs anyway.
 - A removed member keeps the ciphertext they already synced. The server stops
-  serving them anything new; forward secrecy needs the shared folder's key
-  rotated among the remaining members, which the server cannot do for you.
-- Live editing messages are opaque to the server. It enforces who may send
-  which class of frame, but a malicious member with **Can view** access can
-  stuff document bytes into
-  presence frames; receivers must act on the frame class, never on anything
-  inside the payload.
+  serving them anything new, but cannot take back what they have.
 - Password guessing is held back per address (10 a minute by default) and per
   account (10 wrong passwords in 10 minutes). A botnet that spreads a few
   guesses per address per account stays under both; length and a second factor

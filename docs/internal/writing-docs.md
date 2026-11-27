@@ -6,6 +6,11 @@ anything that points into the code go in `docs/internal/`. When a user page
 needs a code-level explanation, link from the internal page to the user page,
 not the other way round.
 
+Delete a plan once it is built and an audit once its findings are fixed. Move
+what is still true, such as decisions, scope limits and accepted risks, into
+the design page or [security review](security-review.md) first. Git history
+keeps the rest.
+
 ## Vocabulary
 
 Use the words the app shows. When the docs and the interface disagree, fix the

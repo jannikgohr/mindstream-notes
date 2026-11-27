@@ -6,8 +6,8 @@ says whether it is **by design**, a **known limitation** or **planned**, and
 points at the code that owns the behaviour, so a by-design trade-off is not
 "fixed" by accident.
 
-The end-to-end coverage for these surfaces (and the planned fixes) is laid out
-in the [test strategy](e2e/strategy.md) and catalogued in the
+The end-to-end coverage for these surfaces is laid out in the
+[test strategy](e2e/strategy.md) and catalogued in the
 [test flows](e2e/flows.md). To run the suites, see
 [e2e-tests/README.md](../../e2e-tests/README.md).
 
@@ -44,19 +44,24 @@ resolved per-field by the CRDT. Concretely:
 - For markdown, a paused/disconnected peer's concurrent text edit **survives**
   the restore the same way: the restore only deletes the range the restorer
   diffed (`minimalDocDiff`), and an unseen concurrent insert was never in it.
-  You get the restored body _plus_ that edit. This used to clobber the peer's
-  text, back when a restore replaced the whole document; narrowing it to a
-  minimal diff stopped a restore from silently destroying a collaborator's
-  typing. Connected peers still get a warning prompt before a restore.
+  You get the restored body _plus_ that edit.
 
 It always converges (no divergence/corruption), but it is not a clean
-transactional swap. The **collab confirmation prompt** (see below) mitigates the
-connected-peer case by warning before overwriting a note others are editing.
+transactional swap.
+
+A restore asks for confirmation when other people are connected
+(`peerCount()` on the `NoteHistoryApi` bridge in `note-history-bridge.svelte.ts`,
+checked in `NoteHistorySection.applyRestore`). Only markdown (`NoteEditor`) and
+PDF (`PdfNoteViewer`) register `peerCount` so far. Kanban, ink and freeform fall
+back to `0` and restore over collaborators without asking. Kanban uses the same
+`CollabProvider` as markdown and only has to register it; ink and freeform need
+presence plumbed from `InkWebCollabProvider` and `ExcalidrawRoomClient` into the
+bridge. This is _planned_.
 
 ### History is per-device, not synced — _by design_
 
 The `note_versions` table is **local and never synced** (see the
-module header in `src-tauri/src/history/mod.rs`). A restore re-expresses content
+module header in `src-tauri/storage-core/src/history.rs`). A restore re-expresses content
 as new ops, so the _content_ converges across devices — but the **timeline**
 (the `reverted` entries, the pre-restore checkpoints, the Undo affordance)
 exists only on the device that performed the action. A second device sees only
@@ -76,19 +81,19 @@ the pre-restore body as another normal restore, so it is collab- and sync-safe.
 
 ### Binary checkpoint does a UI-thread encode on explicit restore — _known limitation_
 
-The frequent **automatic** history capture for freeform/ink/PDF was moved off
-the UI thread (the backend reads saved `yrs_state` via
+The frequent **automatic** history capture for freeform/ink/PDF runs off the
+UI thread (the backend reads saved `yrs_state` via
 `capture_current_note_version`). But the **pre-restore checkpoint and the Undo
 payload** come from `bridge.currentSnapshot()`, which encodes the live Yjs doc
 on the UI thread. This runs only on an explicit user restore (infrequent), not
 the hot autosave path — but a very large canvas may show a brief hitch at the
 moment of restore.
 
-### Editor undo never reverts a restore — _by design (consistency fix)_
+### Editor undo never reverts a restore — _by design_
 
 `Ctrl+Z` reverts only granular edits (a keystroke, a stroke, an annotation). A
 version restore is **never** placed on the editor's native undo stack on any
-kind — markdown and freeform never did; PDF uses `HISTORY_RESTORE_ORIGIN` which
+kind: markdown and freeform don't put it there; PDF uses `HISTORY_RESTORE_ORIGIN` which
 the `UndoManager` doesn't track; ink calls `InkDocument.resetUndoHistory()`
 after a restore. Undoing a restore goes through History / the Undo affordance,
 not `Ctrl+Z`. Documented here so it isn't "fixed" back into the undo stack.
@@ -103,7 +108,7 @@ When a pull delivers a tombstone for a row that has unpushed local edits
 (`dirty = 1`), the sync does **not** delete it. Instead it _detaches_ the row —
 drops its link to the copy on the server but keeps the row and
 its edits — and lets the next push re-home it (`apply_remote_delete` in
-`src-tauri/src/sync/mod.rs`). Two consequences, both intentional:
+`src-tauri/src/sync/claim.rs`). Two consequences, both intentional:
 
 - **Re-home is non-destructive.** Sharing a folder tombstones its items out of
   the vault and recreates them in a scope collection. A device holding an offline
@@ -120,7 +125,7 @@ its edits — and lets the next push re-home it (`apply_remote_delete` in
 
 A **clean** (non-dirty) row is still a real delete, with one exception: a clean
 **asset** that a note on this device still shows, from its body or the live part
-of its Yjs state, is kept and re-uploaded the same way (`asset_still_drawn` in
+of its Yjs state, is kept and re-uploaded the same way (`note_still_drawing` in
 `src-tauri/src/sync/claim.rs`). The device that sent the delete judged from its
 own copy of the note, which can lag. History doesn't count as a reference here:
 it is per-device, and counting it would bring back images that were removed on
@@ -135,25 +140,11 @@ not by combining.
 
 ### A note's rendered body can lag its content after concurrent edits — _known limitation_
 
-Markdown notes keep two copies of their text: the Yjs state the editor works
-on, and the rendered markdown in `notes.body` that search, previews and the
-attachment sweep read. Rust can't render the editor's ProseMirror fragment, so
-a pull merges the Yjs state but has to pick one device's rendering
-(`apply_note_payload` in `src-tauri/src/sync/apply/notes.rs`):
-
-- If this device has no content the incoming copy lacks, the incoming rendering
-  wins. This covers a server switch, which marks every row dirty on every
-  device without any of them holding new content.
-- If this device has unpushed content, its own rendering wins, so the push that
-  follows doesn't upload a body missing that edit.
-
-When **both** devices edited the note offline, neither rendering matches the
-merged state, and the kept one lacks the other device's edit until an editor
-saves the note again. The editor itself shows the merged content. Anything that
-decides whether an attachment is in use reads the live Yjs state as well as
-`body` (`live_strings` in `src-tauri/storage-core/src/yrs_doc.rs`), so a lagging
-body doesn't cost an attachment. Closing the gap needs a markdown renderer that
-runs without an open editor and matches the editor's output.
+When two devices edit a Markdown note offline, the merged Yjs state is right but
+`notes.body` keeps one device's rendering until an editor saves the note again.
+Search and previews read `body`; attachment checks also read the live Yjs state.
+The rules and why Rust can't re-render are in
+[markdown-editor.md](markdown-editor.md#sync-and-a-lagging-body).
 
 ### Demo notes can duplicate across app versions and can't be shared — _by design_
 
@@ -176,10 +167,10 @@ An unedited demo note also stays on its device (`dirty = 0`) until it changes.
 
 ## Persistence & backend
 
-### Single SQLite connection behind one mutex — _known limitation (pre-existing)_
+### Single SQLite connection behind one mutex — _known limitation_
 
 The whole app shares one `Mutex<Connection>` (`src-tauri/src/db/mod.rs`). History
-capture now does its CPU-heavy work (decompress / diff / compress / base64)
+capture does its CPU-heavy work (decompress / diff / compress / base64)
 **off** that lock — read the dedup baseline under the lock, compute released,
 re-acquire only to insert — but every DB operation still serializes on that one
 connection. High-throughput workloads (vault scans, batch imports) can contend.
@@ -190,71 +181,18 @@ pool) if this ever becomes a bottleneck.
 
 ## Import
 
-The importer and its format mapping are described in [import.md](../import.md).
+The user-facing entries are in
+[Known limitations](../known-limitations.md#import). Where each one lives:
 
-### Evernote links between notes are matched by title — _known limitation_
-
-Evernote writes note links as `evernote:///view/<user>/<shard>/<guid>/<guid>/`,
-but most `.enex` exports leave out the `<guid>` element on the notes
-themselves, so the guid in a link usually has nothing to match. The importer
-falls back to the link text, which Evernote fills with the target's title
-(`rewrite_evernote_links` in `src-tauri/storage-core/src/import/links.rs`). Two notes with
-the same title can be confused. Exports that do carry guids resolve exactly. A
-link that matches nothing keeps its text and loses the dead `evernote:` URL.
-
-### Obsidian note embeds become plain links — _by design_
-
-`![[Some note]]` shows one note inside another in Obsidian. Mindstream has no
-equivalent, so the embed becomes an ordinary link to the same note. Image and
-file embeds (`![[diagram.png]]`) are imported as attachments as expected.
-
-### Canvas and Excalidraw files are not imported as drawings — _planned_
-
-Obsidian `.canvas` files and the Excalidraw plugin's drawings are skipped. They
-could map onto the freeform note kind, which uses Excalidraw, but that mapping
-has not been written.
-
-### Existing duplicate attachments are not merged — _by design_
-
-Attachments are stored by content hash since migration 26, so new uploads and
-imports reuse identical bytes. Duplicates already in a vault before that stay
-as separate rows: merging them would mean rewriting the `asset:mindstream/<id>`
-URLs inside note bodies from within a database migration. The dedup index is
-deliberately not unique for the same reason (`src-tauri/src/db/migrations.rs`).
-
-### Title-resolved `[[wikilinks]]` still work until converted — _deprecated_
-
-Bodies written before note links carried ids can contain a bare `[[Title]]`,
-which the editor resolves by title when clicked (`resolveNoteIdByTitle`, now
-deprecated). On a title collision it picks the most recently modified note, so
-the target can change as titles are edited. **Settings → Data & Backup → Maintenance →
-Convert legacy links** rewrites them as id-based links; the runtime fallback can
-be removed once that has run. Links whose title matches no note are left as
-written.
-
----
-
-## Planned / not yet implemented
-
-### Collab confirmation prompt before restore — _partially implemented_
-
-A restore overwrites the shared document for everyone connected. To make that
-deliberate, the restore now shows a confirmation when other clients are present
-(_"Other people are editing this note live. Restoring replaces the shared
-content for everyone… Continue?"_), with solo editing left frictionless. It is
-wired through an optional `peerCount()` method on the `NoteHistoryApi` bridge
-(`note-history-bridge.svelte.ts`), checked in `NoteHistorySection.applyRestore`.
-
-The remaining gap is **per-editor presence**. The live editors use three
-collab layers: `CollabProvider.awareness` (markdown, PDF and Kanban),
-`InkWebCollabProvider` (ink) and `ExcalidrawRoomClient` (freeform). Only
-markdown (`NoteEditor`) and PDF (`PdfNoteViewer`) register
-`peerCount: () => otherPeerCount(awareness)` today. Kanban
-(`KanbanNoteEditor`), ink (`InkWebNoteEditor`) and freeform
-(`FreeformNoteEditor`) do **not** register `peerCount`, so for those three
-kinds the count falls back to `0` and a restore still overwrites collaborators
-silently. Kanban uses the same `CollabProvider` as markdown and only has to
-register it. Ink and freeform need presence plumbed from
-`InkWebCollabProvider` and `ExcalidrawRoomClient` into the bridge. Until then
-the _non-transactional restore_ limitation above is user-visible for Kanban,
-ink and freeform.
+- **Evernote links matched by title:** `rewrite_evernote_links` in
+  `src-tauri/storage-core/src/import/links.rs`.
+- **Obsidian note embeds become plain links:** the wikilink rewrite in
+  `src-tauri/storage-core/src/import/links.rs`. **Canvas and Excalidraw files**
+  are not Markdown, so the vault source never picks them up.
+- **Older duplicate attachments are not merged:** `idx_assets_scope_hash` is
+  deliberately not unique, because merging would mean rewriting
+  `asset:mindstream/<id>` URLs in note bodies from inside a migration (see the
+  comment above it in `src-tauri/storage-core/src/migrations.rs`).
+- **Title links pick the most recently edited note:** `resolveNoteIdByTitle` in
+  `src/lib/editor/plugins/prose/wikilink/note-resolve.ts`, deprecated. It can go
+  once **Convert legacy links** (`src-tauri/src/import/legacy_links.rs`) has run.

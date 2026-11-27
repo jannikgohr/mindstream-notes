@@ -15,56 +15,64 @@ you do.
 
 [.env.example](../backend/server/.env.example) holds the settings most servers
 want to look at, with the choice of who may sign up at the top. The table below
-is the full list.
+lists every setting the server reads. Each one is also a command-line flag named
+after it, so `MINDSTREAM_SIGNUP` is `--signup`.
 
 Under Docker, a variable in `.env` only reaches the server if
 [compose.yml](../backend/server/compose.yml) passes it on, and the **Compose**
-column says which ones it does. _Not yet_ marks a setting the server reads but
-the compose file does not pass on yet: setting it in `.env` has no effect for
-now. Passing them on is planned. Run the server binary directly and every
-variable works.
+column says which ones it does. _Not yet_ marks a setting the compose file does
+not pass on: setting it in `.env` has no effect. Run the server binary directly
+and every variable works.
 
-Compose leaves CPU use uncapped by default. Set `MINDSTREAM_CPU_LIMIT` in
-`.env`, or in Dokploy's environment settings, to cap it in cores. An explicit
-cap must not exceed the host's CPU count. For example, use `2.0` or less on a
-2-CPU VPS. Docker refuses to create the container if the cap is too high.
-Set `0.0` to remove the cap. This setting controls Docker, so it does not
-need to be passed into the server process. The memory limit remains 4 GiB.
-
-| Variable                                              | Default           | Compose                  | Meaning                                                                                   |
-| ----------------------------------------------------- | ----------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `MINDSTREAM_DATABASE_URL`                             | required          | from `POSTGRES_PASSWORD` | Postgres connection string                                                                |
-| `MINDSTREAM_DATABASE_CONNECTIONS`                     | 16                | _not yet_                | Connections kept open to Postgres                                                         |
-| `MINDSTREAM_LISTEN`                                   | 0.0.0.0:3735      | fixed by the image       | Address to listen on                                                                      |
-| `MINDSTREAM_BLOB_DIR`                                 | data/blobs        | fixed by the image       | Where large chunks are stored                                                             |
-| `MINDSTREAM_SIGNUP`                                   | closed            | yes                      | Who may sign up: `closed`, `invite` or `open`. See [signing up][signup]                   |
-| `MINDSTREAM_PUBLIC_HOSTS`                             | empty             | yes                      | Hostnames clients use, when the proxy rewrites the Host header                            |
-| `MINDSTREAM_TRUSTED_PROXIES`                          | loopback only     | yes                      | Networks whose `X-Forwarded-For` is believed                                              |
-| `MINDSTREAM_AUTH_RATE_PER_MINUTE`                     | 10                | yes                      | Sign-in attempts per address per minute. 0 turns the limit off                            |
-| `MINDSTREAM_AUTH_RATE_BURST`                          | 20                | _not yet_                | Attempts an address may make at once before the rate applies                              |
-| `MINDSTREAM_LOOKUP_RATE_PER_MINUTE`                   | 30                | yes                      | Lookups of another account by name per account per minute. 0 turns the limit off          |
-| `MINDSTREAM_LOOKUP_RATE_BURST`                        | 30                | _not yet_                | Lookups an account may make at once before the rate applies                               |
-| `MINDSTREAM_UNKNOWN_NAMES_PER_DAY`                    | 20                | yes                      | Names an account may look up that turn out to be nobody's, per day. 0 turns the limit off |
-| `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS`              | 128               | yes                      | Connections, and separately sockets, one address may hold open. 0 turns the cap off       |
-| `MINDSTREAM_MAX_CONNECTIONS`                          | 10000             | yes                      | The same for the whole server. 0 leaves only the limit on open files                      |
-| `MINDSTREAM_ADMIN_TOKEN`                              | unset             | yes                      | Turns on the [interface for setting account limits][admin-api]                            |
-| `MINDSTREAM_SECRET_KEY`                               | unset             | yes                      | Key that seals authenticator secrets. See [account security][security]                    |
-| `MINDSTREAM_SECRET_KEY_FILE`                          | see below         | _not yet_                | Where that key is created when none is given                                              |
-| `MINDSTREAM_TOTP_ISSUER`                              | Mindstream Notes  | _not yet_                | Name an authenticator app shows for accounts here                                         |
-| `MINDSTREAM_APP_URL`                                  | the releases page | yes                      | Where the invite page sends people without the app                                        |
-| `MINDSTREAM_MAX_PAGE_BYTES`                           | 33554432          | _not yet_                | Most content one response carries. See [response size](#response-size)                    |
-| `MINDSTREAM_KEEP_REVISIONS`                           | 10                | yes                      | Earlier revisions kept per item besides the current one                                   |
-| `MINDSTREAM_SESSION_IDLE_DAYS`                        | 90                | yes                      | Days a device's session may go unused before it ends. 0 never ends one for that           |
-| `MINDSTREAM_MAX_BODY_BYTES`                           | 78643200          | _not yet_                | Largest request body accepted                                                             |
-| `MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT`                 | 1073741824        | yes                      | Bytes of request bodies held in memory at once. See [request size](#request-size)         |
-| `MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT_PER_ADDRESS`     | 268435456         | yes                      | The same for one address. Keep it above `MINDSTREAM_MAX_BODY_BYTES`                       |
-| `MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT`             | 536870912         | yes                      | Bytes of responses held in memory at once. See [response size](#response-size)            |
-| `MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT_PER_ADDRESS` | 134217728         | yes                      | The same for one address                                                                  |
-| `MINDSTREAM_INLINE_CHUNK_BYTES`                       | 20480             | _not yet_                | Chunks up to this size stay in the database                                               |
+| Variable                                              | Default           | Compose                  | Meaning                                                                                                                                |
+| ----------------------------------------------------- | ----------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `MINDSTREAM_DATABASE_URL`                             | required          | from `POSTGRES_PASSWORD` | Postgres connection string                                                                                                             |
+| `MINDSTREAM_DATABASE_CONNECTIONS`                     | 16                | _not yet_                | Connections kept open to Postgres                                                                                                      |
+| `MINDSTREAM_LISTEN`                                   | 0.0.0.0:3735      | fixed by the image       | Address to listen on                                                                                                                   |
+| `MINDSTREAM_BLOB_DIR`                                 | data/blobs        | fixed by the image       | Where large chunks are stored                                                                                                          |
+| `MINDSTREAM_SIGNUP`                                   | closed            | yes                      | Who may sign up: `closed`, `invite` or `open`. See [signing up][signup]                                                                |
+| `MINDSTREAM_PUBLIC_HOSTS`                             | empty             | yes                      | Hostnames clients use, when the proxy rewrites the Host header                                                                         |
+| `MINDSTREAM_TRUSTED_PROXIES`                          | loopback only     | yes                      | Networks whose `X-Forwarded-For` is believed                                                                                           |
+| `MINDSTREAM_AUTH_RATE_PER_MINUTE`                     | 10                | yes                      | Sign-in attempts per address per minute. 0 turns the limit off                                                                         |
+| `MINDSTREAM_AUTH_RATE_BURST`                          | 20                | _not yet_                | Attempts an address may make at once before the rate applies                                                                           |
+| `MINDSTREAM_LOOKUP_RATE_PER_MINUTE`                   | 30                | yes                      | Lookups of another account by name per account per minute. 0 turns the limit off                                                       |
+| `MINDSTREAM_LOOKUP_RATE_BURST`                        | 30                | _not yet_                | Lookups an account may make at once before the rate applies                                                                            |
+| `MINDSTREAM_UNKNOWN_NAMES_PER_DAY`                    | 20                | yes                      | Names an account may look up that turn out to be nobody's, per day. 0 turns the limit off                                              |
+| `MINDSTREAM_MAX_CONNECTIONS_PER_ADDRESS`              | 128               | yes                      | Connections, and separately sockets, one address may hold open. 0 turns the cap off                                                    |
+| `MINDSTREAM_MAX_CONNECTIONS`                          | 10000             | yes                      | The same for the whole server. 0 leaves only the limit on open files                                                                   |
+| `MINDSTREAM_ADMIN_TOKEN`                              | unset             | yes                      | Turns on the [interface for setting account limits][admin-api]                                                                         |
+| `MINDSTREAM_SECRET_KEY`                               | unset             | yes                      | Key that seals authenticator secrets. See [account security][security]                                                                 |
+| `MINDSTREAM_SECRET_KEY_FILE`                          | see below         | _not yet_                | Where that key is created when none is given                                                                                           |
+| `MINDSTREAM_TOTP_ISSUER`                              | Mindstream Notes  | _not yet_                | Name an authenticator app shows for accounts here                                                                                      |
+| `MINDSTREAM_APP_URL`                                  | the releases page | yes                      | Where the invite page sends people without the app                                                                                     |
+| `MINDSTREAM_MAX_PAGE_BYTES`                           | 33554432          | _not yet_                | Most content one response carries. See [response size](#response-size)                                                                 |
+| `MINDSTREAM_KEEP_REVISIONS`                           | 10                | yes                      | Earlier revisions kept per item besides the current one                                                                                |
+| `MINDSTREAM_SESSION_IDLE_DAYS`                        | 90                | yes                      | Days a device's session may go unused before it ends. 0 never ends one for that                                                        |
+| `MINDSTREAM_MAX_BODY_BYTES`                           | 78643200          | _not yet_                | Largest request body accepted                                                                                                          |
+| `MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT`                 | 1073741824        | yes                      | Bytes of request bodies held in memory at once. See [request size](#request-size)                                                      |
+| `MINDSTREAM_MAX_BODY_BYTES_IN_FLIGHT_PER_ADDRESS`     | 268435456         | yes                      | The same for one address. Keep it above `MINDSTREAM_MAX_BODY_BYTES`                                                                    |
+| `MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT`             | 536870912         | yes                      | Bytes of responses held in memory at once. See [response size](#response-size)                                                         |
+| `MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT_PER_ADDRESS` | 134217728         | yes                      | The same for one address                                                                                                               |
+| `MINDSTREAM_INLINE_CHUNK_BYTES`                       | 20480             | _not yet_                | Chunks up to this size stay in the database                                                                                            |
+| `MINDSTREAM_TEST_RESET`                               | false             | yes                      | Development only. Release builds leave out the route it turns on. See [server development](internal/server-development.md#conformance) |
 
 [signup]: server-administration.md#signing-up
 [admin-api]: server-administration.md#from-another-program
 [security]: server-administration.md#account-security
+
+A few variables are read by Compose, or by the logger, rather than by the server's
+own settings:
+
+| Variable               | Default                                  | Meaning                                                                                   |
+| ---------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD`    | required                                 | The database password. Compose builds `MINDSTREAM_DATABASE_URL` from it                   |
+| `MINDSTREAM_PORT`      | 3735                                     | The port on the host the server is published on                                           |
+| `MINDSTREAM_BIND`      | 127.0.0.1                                | The host address that port is published on. See [trusted proxies](#trusted-proxies)       |
+| `MINDSTREAM_CPU_LIMIT` | 0.0                                      | CPU cap in cores. 0.0 leaves it uncapped. Docker refuses a cap above the host's CPU count |
+| `RUST_LOG`             | `mindstream_server=info,tower_http=warn` | Log levels. Compose does not pass it on                                                   |
+
+The memory limit is 4 GiB, set as `memory` in `compose.yml`. Edit it there to
+change it, together with the limits under [response size](#response-size).
 
 `GET /api/v1/mindstream/info/` returns the server's version, protocol level and
 signup policy as JSON. `GET /healthz` answers when the server is up; the app's
@@ -94,9 +102,8 @@ private address. Narrow it together with `MINDSTREAM_BIND`, and read the warning
 the server logs at startup. It logs that warning whenever it listens past
 loopback with trusted networks set, which under compose is always.
 
-Docker routes published ports past `ufw`, so a `ufw` rule on the host does not
-restrict who reaches the server. Use `MINDSTREAM_BIND` or a firewall in front
-of the host.
+Docker publishes ports past `ufw`; see
+[the quick start](self-hosting.md#option-a-ip-address-over-http-trusted-networks-only).
 
 ## Connection limits
 
@@ -121,25 +128,18 @@ nginx's default 60-second read timeout.
 
 ### Timeouts
 
-A request has to arrive in good time, or its connection is closed. Its head gets
-30 seconds, counted from when the connection opens or the previous answer on it
-went out, so a connection kept open between requests is closed after 30 quiet
-seconds too. Its body gets 30 seconds to get going and has to have come at
-1 KiB a second on average since, and however much of it has come, it has about
-half an hour in all. An answer gets 30 seconds, and every byte the client takes
-buys it more, at 16 KiB a second and up to half an hour, so a client that takes
-less than that for long enough is cut off. HTTP/2 is not served: a proxy in
-front speaks HTTP/1.1 to the server, whatever it speaks to clients.
+The server cuts off a client that is too slow: a request head has 30 seconds,
+a body has to arrive at about 1 KiB a second and an answer has to be taken at
+about 16 KiB a second, and neither may take more than about half an hour. It
+does not serve HTTP/2, so a proxy in front speaks HTTP/1.1 to it, whatever it
+speaks to clients.
 
 ## Response size
 
-A response is built in memory, so what one response carries is held to
-`MINDSTREAM_MAX_PAGE_BYTES`: content, metadata, keys and the uids of chunks. The
-server weighs an answer before it reads it. A list ends its page early when the
-next item would not fit. A request for named items sends the ones that fit with
-their content and the rest as the uids of their chunks, and if they would not
-fit even that way it answers 413 and the app asks for fewer. It does all of this
-by itself, and one item is always answered, however large.
+One response carries at most `MINDSTREAM_MAX_PAGE_BYTES` of content, metadata
+and keys. The app pages through anything larger by itself. An item too large for
+any page goes out alone, but it still has to fit the in-flight limits below,
+or the answer is `503`.
 
 A response stays in memory until the client has taken it, and encoding one takes
 about as much again. `MINDSTREAM_MAX_RESPONSE_BYTES_IN_FLIGHT` is what the server
@@ -219,10 +219,10 @@ server {
 ## What is on disk
 
 Chunks larger than `MINDSTREAM_INLINE_CHUNK_BYTES` are files under
-`MINDSTREAM_BLOB_DIR`, one file per upload. An upload is answered only after its
-file and the directories the write touched have been synced, so what the server
-acknowledged survives a power cut. Back the blob directory up together with the
-database: each is useless without the other.
+`MINDSTREAM_BLOB_DIR`, one file per chunk. A write is answered only after its
+files and the directories it touched have been synced, so what the server
+acknowledged survives a power cut.
 
 `MINDSTREAM_SECRET_KEY_FILE` defaults to `secret.key` in the blob directory.
-Under compose both live in the `blobs` volume, mounted at `/data`.
+Under compose both live in the `blobs` volume, mounted at `/data`. What to back
+up is in [Backups](server-administration.md#backups).

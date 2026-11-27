@@ -47,16 +47,13 @@ has its own, much larger test suite, which needs no stack at all: see
 
 ## Account provisioning
 
-Most T4 collab flows reuse **one account on two devices**. The **sharing**
-flows ([flows.md](flows.md) §4) are stronger: they need **two distinct users**
-— a sender and a recipient whose public key the sender resolves via
-`fetch_user_profile` — so the shared-collection namespacing trick isn't enough.
+Most collaboration specs use **one account on two devices**. The sharing flows
+([flows.md](flows.md) §4) need **two accounts**, a sender and a recipient whose
+public key the sender looks up.
 
-`e2e-tests/app/helpers/accounts.ts` (`provisionTwoAccounts`) signs up two fresh
-users via the `etebase` JS SDK on each run, which the test stack's open signup
-allows. Fresh accounts are the default so a run never inherits stale
-vault/invite/notification state. Set `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` to reuse
-the gitignored `.t4-accounts.json` cache while iterating locally.
-
-Isolation is per-run: disposable volumes (or `pnpm backend:test:reset`) keep
-state from leaking between runs.
+`e2e-tests/app/helpers/accounts.ts` (`provisionTwoAccounts`) signs up fresh
+users through the `etebase` JS SDK on every run, which the test stack's open
+signup allows, so a run never inherits old vault, invitation or notification
+state. `MINDSTREAM_E2E_REUSE_ACCOUNTS=1` reuses the gitignored
+`.t4-accounts.json` while iterating locally. `pnpm backend:test:reset` wipes
+the volumes between runs.
