@@ -401,6 +401,7 @@
     checkUrlStatus = null;
     checkUrlOk = false;
     checkUrlError = null;
+    error = null;
     void setSettingValue('account.serverUrl', target.value);
   }
 

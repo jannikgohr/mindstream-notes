@@ -91,6 +91,42 @@ describe('normalizeServerUrl', () => {
     expect(ws.error).toMatch(/http/);
   });
 
+  it('allows plain http only for local and private addresses', () => {
+    for (const local of [
+      'http://notes.localhost',
+      'http://nas.local:3735',
+      'http://nas.lan',
+      'http://127.0.0.1:8080',
+      'http://10.0.0.5',
+      'http://172.16.1.1',
+      'http://192.168.1.20/notes',
+      'http://169.254.0.9',
+      'http://100.101.102.103',
+      'http://[::1]:8080',
+      'http://[fd12::1]',
+      'http://[fe80::1]',
+      'http://[::ffff:192.168.0.1]'
+    ]) {
+      expect(normalizeServerUrl(local).error, local).toBeNull();
+    }
+    for (const remote of [
+      'http://notes.example.com',
+      'http://nas',
+      'http://8.8.8.8',
+      'http://172.32.0.1',
+      'http://100.128.0.1',
+      'http://[2001:db8::1]',
+      'http://[::ffff:8.8.8.8]',
+      'http://localhost.example.com',
+      'http://nas.local.example.com',
+      'http://example.lane'
+    ]) {
+      const r = normalizeServerUrl(remote);
+      expect(r.url, remote).toBe('');
+      expect(r.error, remote).toMatch(/https/);
+    }
+  });
+
   it('rejects unparseable input', () => {
     const r = normalizeServerUrl('not a url');
     expect(r.url).toBe('');

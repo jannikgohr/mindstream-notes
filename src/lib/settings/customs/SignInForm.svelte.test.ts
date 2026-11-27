@@ -263,6 +263,20 @@ describe('checking the server URL', () => {
       /Wrong username or password/
     );
   });
+
+  it('drops a sign-in error once the address changes', async () => {
+    etebaseLogin.mockRejectedValueOnce(refused('login_bad_signature'));
+    render(SignInForm);
+    await type('Username', 'ann');
+    await type('Password', 'not it');
+    await fireEvent.click(button('Sign in'));
+    await screen.findByTestId('account-error');
+
+    await type('Server URL', 'http://notes.example.com');
+
+    expect(screen.queryByTestId('account-error')).toBeNull();
+    expect(screen.getByText(/Use https:\/\//)).toBeTruthy();
+  });
 });
 
 describe('signing in', () => {
