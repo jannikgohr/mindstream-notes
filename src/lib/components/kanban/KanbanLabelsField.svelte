@@ -439,6 +439,11 @@
     background: var(--wx-background-hover);
   }
 
+  .kanban-label-result:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+  }
+
   .kanban-label-create :global(svg) {
     width: 14px;
     height: 14px;
