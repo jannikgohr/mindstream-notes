@@ -2672,9 +2672,29 @@
     background: color-mix(in oklch, var(--highlight-search) 45%, transparent);
   }
 
-  :global(.pdf-page-host .pdf-app-annotation-selected) {
+  :global(.pdf-page-host .pdf-app-annotation-selected),
+  :global(.pdf-page-host .pdf-app-annotation-selection) {
     outline: 2px solid color-mix(in srgb, var(--ring) 85%, transparent);
     outline-offset: 2px;
+  }
+
+  :global(.pdf-page-host .pdf-app-annotation-selection) {
+    position: absolute;
+    border-radius: 2px;
+    pointer-events: none;
+  }
+
+  /* The frame stands in for the focus ring of the rects it surrounds. */
+  :global(.pdf-page-host .pdf-app-annotation-framed:focus-visible) {
+    outline: none;
+  }
+
+  :global(
+    .pdf-page-host
+      .pdf-app-annotation-layer:has(.pdf-app-annotation-framed:focus-visible)
+      .pdf-app-annotation-selection
+  ) {
+    outline: 3px solid var(--ring);
   }
 
   :global(.pdf-page-host .pdf-app-annotation-resolved) {

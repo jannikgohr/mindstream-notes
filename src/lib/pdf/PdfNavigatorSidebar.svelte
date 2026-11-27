@@ -198,13 +198,13 @@
         <button
           type="button"
           use:thumb={pageNumber}
-          class="group flex flex-col items-center gap-1"
+          class="group flex flex-col items-center gap-1 focus-visible:outline-none"
           aria-label={goToLabel(pageNumber)}
           aria-current={pageNumber === activePageNumber ? 'page' : undefined}
           onclick={() => onJump(pageNumber)}
         >
           <span
-            class="block overflow-hidden rounded-sm bg-white ring-1 transition-[box-shadow,outline] {pageNumber ===
+            class="block overflow-hidden rounded-sm bg-white ring-1 transition-[box-shadow,outline] group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-2 group-focus-visible:outline-ring group-focus-visible:ring-border {pageNumber ===
             activePageNumber
               ? 'outline outline-2 outline-ring ring-ring'
               : 'ring-border group-hover:ring-foreground/40'}"
