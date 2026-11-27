@@ -15,9 +15,12 @@
 import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  foreground,
   frames,
+  gpu,
   launch,
   median,
+  memoryKind,
   pssMB,
   sleep,
   until,
@@ -37,6 +40,8 @@ const config = join(work, 'config');
 const results = {
   app: `Obsidian ${version}`,
   vault: label,
+  platform: process.platform,
+  memory: memoryKind,
   graphConfig: values.graph ?? 'default',
   coldStart: [],
   coldIndexed: [],
@@ -59,11 +64,17 @@ if (values.graph) {
 }
 
 async function start() {
-  const started = await launch(exe, ['--window-size=1600,1000'], {
-    env: { XDG_CONFIG_HOME: config },
-    port: 9333,
-    pick: (p) => p.evaluate(() => !!window.app)
-  });
+  // XDG_CONFIG_HOME moves it on Linux, --user-data-dir on Windows.
+  const userData = `--user-data-dir=${join(config, 'obsidian')}`;
+  const started = await launch(
+    exe,
+    ['--window-size=1600,1000', userData, ...foreground],
+    {
+      env: { XDG_CONFIG_HOME: config },
+      port: 9333,
+      pick: (p) => p.evaluate(() => !!window.app)
+    }
+  );
   await started.page.setViewportSize({ width: 1600, height: 1000 });
   const t0 = { t0: started.t0 };
   started.tree = await until(
@@ -82,6 +93,7 @@ async function start() {
 }
 
 let obsidian = await start();
+results.gpu = await gpu(obsidian.page);
 results.firstIndex = obsidian.indexed;
 log('first index', obsidian.indexed);
 await sleep(3000);

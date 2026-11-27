@@ -13,18 +13,23 @@
  * Opening a note goes by route, to the page named in PAGE. The graph view
  * starts on tags only; the bench switches it to all pages.
  */
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
+  foreground,
   frames,
+  gpu,
   launch,
   median,
+  memoryKind,
   pssMB,
   sleep,
   until,
   zoom
 } from '../measure.mjs';
-import { app, cache, log, save, setup } from './common.mjs';
+import { app, cache, homeEnv, log, save, setup } from './common.mjs';
 
 const { values, vault, label, query } = await setup();
 const { exe, version } = await app('logseq');
@@ -36,6 +41,8 @@ const graph = join(work, `graph-${label}`);
 const results = {
   app: `Logseq ${version} (DB graph)`,
   vault: label,
+  platform: process.platform,
+  memory: memoryKind,
   coldStart: [],
   heapMB: {},
   pssMB: {}
@@ -71,6 +78,13 @@ async function convert(from, to) {
   }
 }
 
+// Logseq keeps its graph list in Electron's home folder, which on Windows
+// is the real profile whatever USERPROFILE says. Run only where that
+// folder is ours to delete afterwards.
+const dotLogseq = process.platform === 'win32' && join(homedir(), '.logseq');
+if (dotLogseq && existsSync(dotLogseq))
+  throw new Error(`${dotLogseq} exists; the bench would overwrite it`);
+
 await rm(work, { recursive: true, force: true });
 await mkdir(home, { recursive: true });
 await mkdir(join(graph, 'logseq'), { recursive: true });
@@ -79,12 +93,20 @@ await writeFile(join(graph, 'logseq', 'config.edn'), '{:meta/version 1}\n');
 await convert(vault, join(graph, 'pages'));
 
 const start = () =>
-  launch(exe, ['--window-size=1600,1000'], {
-    env: { HOME: home },
-    port: 9336,
-    pick: (p) =>
-      p.evaluate(() => !!document.querySelector('#main-content-container'))
-  });
+  launch(
+    exe,
+    [
+      '--window-size=1600,1000',
+      `--user-data-dir=${join(home, 'electron')}`,
+      ...foreground
+    ],
+    {
+      env: homeEnv(home),
+      port: 9336,
+      pick: (p) =>
+        p.evaluate(() => !!document.querySelector('#main-content-container'))
+    }
+  );
 
 // The graph is open when the sidebar names it and the page shows blocks.
 const ready = (name) =>
@@ -98,6 +120,7 @@ const ready = (name) =>
 let logseq = await start();
 try {
   let page = logseq.page;
+  results.gpu = await gpu(page);
   await page.setViewportSize({ width: 1600, height: 1000 });
   await until(
     page,
@@ -231,4 +254,5 @@ try {
 } finally {
   await logseq.close();
   await rm(work, { recursive: true, force: true });
+  if (dotLogseq) await rm(dotLogseq, { recursive: true, force: true });
 }

@@ -2,11 +2,22 @@
  * Measuring helpers shared by the large-vault bench and the competitor
  * benches, so every app is timed the same way.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { chromium } from '@playwright/test';
 
 export { chromium };
+
+/**
+ * Chromium switches that keep a window drawing at full rate when it is
+ * covered or unfocused: Windows tracks occlusion and stops a hidden
+ * window's frames. Joplin rejects them, and it draws no graph.
+ */
+export const foreground = [
+  '--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding',
+  '--disable-background-timer-throttling'
+];
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,35 +26,78 @@ export function median(values) {
   return sorted[Math.floor((sorted.length - 1) / 2)];
 }
 
-/** `pid` and all its descendants, read from /proc. */
-function processTree(pid) {
-  const children = new Map();
+/**
+ * Every process as pid → [parent pid, bytes]. The bytes are the private
+ * working set (Task Manager's "Memory") on Windows and 0 on Linux, where
+ * PSS is read per process.
+ */
+function processes() {
+  const table = new Map();
+  if (process.platform === 'win32') {
+    const out = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-Command',
+        'Get-CimInstance Win32_PerfRawData_PerfProc_Process -Property IDProcess,CreatingProcessID,WorkingSetPrivate | % { "$($_.IDProcess) $($_.CreatingProcessID) $($_.WorkingSetPrivate)" }'
+      ],
+      { encoding: 'utf8' }
+    );
+    for (const line of out.split(/\r?\n/)) {
+      const [pid, ppid, bytes] = line.split(' ').map(Number);
+      if (pid) table.set(pid, [ppid, bytes]);
+    }
+    return table;
+  }
   for (const name of readdirSync('/proc')) {
     if (!/^\d+$/.test(name)) continue;
     try {
       const stat = readFileSync(`/proc/${name}/stat`, 'utf8');
       const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-      if (!children.has(ppid)) children.set(ppid, []);
-      children.get(ppid).push(Number(name));
+      table.set(Number(name), [ppid, 0]);
     } catch {
       // The process exited while we looked.
     }
   }
+  return table;
+}
+
+/** `pid` and all its descendants. */
+function processTree(pid, table = processes()) {
+  const children = new Map();
+  for (const [p, [ppid]] of table) {
+    if (!children.has(ppid)) children.set(ppid, []);
+    children.get(ppid).push(p);
+  }
   const out = [];
   const walk = (p) => {
     out.push(p);
-    for (const child of children.get(p) ?? []) walk(child);
+    for (const child of children.get(p) ?? []) if (child !== p) walk(child);
   };
   walk(pid);
   return out;
 }
 
+/** What the memory numbers mean on this platform, for the results. */
+export const memoryKind =
+  process.platform === 'win32' ? 'private working set' : 'PSS';
+
 /**
- * Proportional set size of a process tree in MiB: pages shared between the
- * processes are split between them, so a Chromium or Electron app's many
- * processes add up to what the app costs. Linux only; null elsewhere.
+ * Memory of a process tree in MiB. On Linux it is the proportional set
+ * size: pages shared between the processes are split between them, so a
+ * Chromium or Electron app's many processes add up to what the app costs.
+ * On Windows it is the private working set, which leaves shared pages out.
+ * null on other platforms.
  */
 export function pssMB(pid) {
+  if (process.platform === 'win32') {
+    const table = processes();
+    const bytes = processTree(pid, table).reduce(
+      (sum, p) => sum + (table.get(p)?.[1] ?? 0),
+      0
+    );
+    return Math.round(bytes / 1048576);
+  }
   if (process.platform !== 'linux') return null;
   let kb = 0;
   for (const p of processTree(pid)) {
@@ -55,6 +109,15 @@ export function pssMB(pid) {
     }
   }
   return Math.round(kb / 1024);
+}
+
+/** The GPU the page renders with, as WebGL names it. */
+export function gpu(page) {
+  return page.evaluate(() => {
+    const gl = document.createElement('canvas').getContext('webgl');
+    const info = gl?.getExtension('WEBGL_debug_renderer_info');
+    return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : null;
+  });
 }
 
 /**

@@ -32,7 +32,8 @@
  *   graphLateFrames    frame times once settled, or after --settle (5 s)
  *   graphLateZoomFrames  the same while zooming (2 s)
  *   heapMB             JS heap after each step, where Chromium reports it
- *   pssMB              memory of the whole browser process tree (Linux)
+ *   pssMB              memory of the whole browser process tree: PSS on
+ *                      Linux, the private working set on Windows
  *   slowStorage        storage requests over 100 ms, with their command
  *
  * --profile saves a CPU profile of the graphFrames window, which DevTools
@@ -48,9 +49,12 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
   chromium,
+  foreground,
   frames,
+  gpu,
   launch,
   median,
+  memoryKind,
   pssMB,
   sleep,
   until,
@@ -83,7 +87,9 @@ function run(command, args, { capture = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: root,
-      stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit']
+      stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'],
+      // pnpm is a .cmd script there.
+      shell: process.platform === 'win32'
     });
     let output = '';
     child.stdout?.on('data', (chunk) => (output += chunk));
@@ -111,7 +117,12 @@ async function startServer() {
       String(PORT),
       '--strictPort'
     ],
-    { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] }
+    {
+      cwd: root,
+      // Vite colours the port on Windows even into a pipe.
+      env: { ...process.env, NO_COLOR: '1' },
+      stdio: ['ignore', 'pipe', 'inherit']
+    }
   );
   process.on('exit', () => server.kill());
   await new Promise((resolve, reject) => {
@@ -147,6 +158,8 @@ const server = values.url
 const results = {
   vault: basename(vault),
   query,
+  platform: process.platform,
+  memory: memoryKind,
   coldStart: [],
   heapMB: {},
   pssMB: {}
@@ -212,9 +225,7 @@ async function start() {
       // Without it Chromium waits about 25 s for the system keyring.
       '--password-store=basic',
       '--enable-precise-memory-info',
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding',
-      '--disable-background-timer-throttling',
+      ...foreground,
       '--window-size=1600,1000',
       'about:blank'
     ],
@@ -245,6 +256,7 @@ const treeShows = (name) =>
 let app = await start();
 try {
   let page = app.page;
+  results.gpu = await gpu(page);
   await page
     .getByRole('button', { name: 'Open settings' })
     .waitFor({ timeout: 120_000 });
