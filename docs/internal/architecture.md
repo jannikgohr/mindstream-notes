@@ -2,9 +2,8 @@
 
 How Mindstream Notes fits together, end to end. For setup and builds see
 [BUILDING.md](../BUILDING.md); for the by-design trade-offs the sync/history model
-carries see [limitations.md](limitations.md); for the
-security issues still open against the design described here see
-[security-review.md](security-review.md).
+carries see [limitations.md](limitations.md); for the trust boundaries and the
+security risks we accepted see [security-review.md](security-review.md).
 
 ## The big ideas
 
