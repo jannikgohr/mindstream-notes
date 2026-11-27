@@ -22,7 +22,7 @@ Two harnesses, deliberately separate:
   of the ~5 minutes a release build takes:
   - `open-notes-bench.mjs` — marginal cost of each additional open note.
   - `open-close-leak.mjs` — whether opening and closing a note returns to
-    baseline (it does; retention is asymptotic, ~2.7 MB over 12 cycles).
+    baseline.
   - `heap-breakdown.mjs` — V8 heap snapshot aggregated by constructor.
   - `boot-payload.mjs` — every JS/CSS file the shell fetches to show one
     markdown note, with a guess at each chunk's owner.
@@ -45,26 +45,10 @@ Two harnesses, deliberately separate:
 
 ## Where the floor comes from
 
-Measured idle, empty vault, one seeded note, on Windows 11 with WebView2
-152.x. Each total is the median of ten private-working-set samples taken one
-second apart after a 25-second startup wait:
-
-| process           | unsafe process folding | safe production flags |
-| ----------------- | ---------------------: | --------------------: |
-| renderer          |                51.7 MB |               52.0 MB |
-| WebView2 browser  |                26.9 MB |               28.4 MB |
-| GPU process       |                24.6 MB |               26.5 MB |
-| Tauri host (Rust) |                 7.4 MB |                7.9 MB |
-| network service   |                      — |                6.8 MB |
-| storage service   |                 3.2 MB |                3.2 MB |
-| crashpad handler  |                 2.1 MB |                2.1 MB |
-| **total**         |           **116.1 MB** |          **126.9 MB** |
-| processes         |                      6 |                     7 |
-
-Removing the unsafe flags costs 10.8 MB, or 9.3%, at idle. Most of that is
-the restored network-service process.
-
-Minimised or parked in the tray, the same build sits at 18–33 MB (below).
+On Windows 11 with WebView2 152.x, idle with an empty vault and one note, the
+whole tree held about 127 MB private: renderer 52 MB, WebView2 browser 28 MB,
+GPU process 27 MB, the Rust host 8 MB and small network, storage and crashpad
+processes. Minimised or parked in the tray, it drops to 18–33 MB (below).
 
 All of the Windows numbers on this page predate vault worker processes. A
 release launch now runs a coordinator, which owns the tray and has no webview,
@@ -85,10 +69,9 @@ process until it exits. Measure the second launch.
 `app.windows[0].additionalBrowserArgs` in `src-tauri/tauri.conf.json`. JSON
 takes no comments, so the reasoning lives here:
 
-- `--in-process-gpu` — **measured, shipped, and then reverted.** It was the
-  largest memory win by far (−13 MB private, −75 MB commit, one fewer
-  process), and it cost roughly seven times the frame time: a mouse sweep
-  down the settings rail on the real binary went from a flat 6.1 ms per frame
+- `--in-process-gpu` is **not used**. It is the largest memory win by far (−13 MB private, −75 MB commit, one fewer
+  process), but it costs roughly seven times the frame time: a mouse sweep
+  down the settings rail on the real binary goes from a flat 6.1 ms per frame
   to a p50 of 42 ms with 60% of frames over 32 ms, and pointer-event delay
   from 4.6 ms to a p95 of 28 ms. That is the whole UI at ~24 fps to save
   13 MB. Running the GPU thread inside the browser process puts it on the UI
@@ -100,13 +83,12 @@ takes no comments, so the reasoning lives here:
 - `--disable-features=msWebOOUI,msPdfOOUI,Translate,OptimizationHints,MediaRouter,BackForwardCache`
   removes browser UI and navigation features this app does not use.
 
-Measured and removed from production: `NetworkServiceInProcess2` saved 10.8 MB
-by moving the network service into the privileged browser process. That is not
-a reasonable security trade for this app. The same cleanup removed
-`msSmartScreenProtection`, `AudioServiceOutOfProcess`,
-`--disable-background-networking`, and `--disable-component-update`. Those
-flags either remove browser protections, suppress their update paths, or move
-more parsing into the browser process.
+Not used for security: `NetworkServiceInProcess2` saves 10.8 MB by moving the
+network service into the privileged browser process, which is not a reasonable
+trade for this app. `msSmartScreenProtection`, `AudioServiceOutOfProcess`,
+`--disable-background-networking` and `--disable-component-update` are out for
+the same reason: they remove browser protections, suppress their update paths,
+or move more parsing into the browser process.
 
 Measured and rejected: `--disable-gpu-compositing` (worse on every axis),
 `--disable-features=StorageServiceOutOfProcess`
@@ -117,38 +99,33 @@ it), `--js-flags=--optimize-for-size` (inside noise).
 ### Telling the webview it is off screen, and letting it shrink
 
 The app closes to the tray rather than quitting, and supports starting there,
-so "running but invisible" is a state it spends real hours in. Two separate
-things had to be fixed for that to be cheap.
+so "running but invisible" is a state it spends real hours in. Two things
+keep that cheap.
 
-**The page never knew it was hidden.** `Window::hide()` — what close-to-tray
+**The page has to be told it is hidden.** `Window::hide()` — what close-to-tray
 calls — and minimising both hide the OS window, but neither touches
 `ICoreWebView2Controller::IsVisible`; wry only sets that from the
-webview-level show/hide, which nothing in the app called. Measured with the
-window minimised, `document.visibilityState` was still `"visible"`. So
-Chromium kept the page in the foreground: timers at full rate, compositing
-alive, and every page released by the memory trim below faulted straight back
-in. That is why a tray-parked app crept back to its full resident size over
-an hour. `webview_memory.rs` now sets `IsVisible` from the window's actual
-state, which is asserted in both directions (plus that the restored window
+webview-level show/hide. Without it, `document.visibilityState` stays
+`"visible"`, Chromium keeps timers at full rate and compositing alive, and
+every page the memory trim below releases faults straight back in.
+`webview_memory.rs` sets `IsVisible` from the window's actual state, which is asserted in both directions (plus that the restored window
 still paints) by `e2e-tests/perf/hidden-visibility.e2e.ts`.
 
-A side effect worth knowing: `$lib/editor/suspend-flush` listens for
-`visibilitychange → hidden` to flush the 800 ms save debounce, and its comment
-has always claimed that fires "on desktop when the window is minimised". It
-did not, until now. Closing to the tray mid-edit used to drop the last
-debounce window; it no longer does.
+`$lib/editor/suspend-flush` relies on this: it flushes the 800 ms save
+debounce on `visibilitychange → hidden`, so closing to the tray mid-edit saves
+the last edit.
 
 **The memory level.** `ICoreWebView2_19::SetMemoryUsageTargetLevel(LOW)` is
 the switch Microsoft ships for a hidden webview, and it is what produces the
 immediate drop:
 
-| minimised to the taskbar | before   | after   |
+| minimised to the taskbar | normal   | LOW     |
 | ------------------------ | -------- | ------- |
 | private working set      | 103.0 MB | 20.1 MB |
 | working set              | ~370 MB  | 89 MB   |
 | commit charge            | ~180 MB  | 168 MB  |
 
-Sampled every five minutes over an hour on the fixed build, private working
+Sampled every five minutes over an hour, private working
 set for the whole tree, starting from 116.3 MB on screen:
 
 | t   | total    | renderer |
@@ -160,8 +137,8 @@ set for the whole tree, starting from 116.3 MB on screen:
 | 51m | 20.7 MB  | 2.0 MB   |
 | 66m | 20.1 MB  | 1.9 MB   |
 
-The renderer's cumulative CPU does not move across the whole hour, which is
-the real tell: before, the page was still running. The step down after ~35
+The renderer's cumulative CPU does not move across the whole hour, so the page
+really is idle. The step down after ~35
 minutes is Windows reclaiming pages that nothing has touched since the trim.
 
 Read that honestly: **this is mostly paging out, not freeing.** Commit charge
@@ -184,15 +161,13 @@ and are short-lived, so they are left alone.
 
 ### Mounting editors only when their tab is first shown
 
-Every tab used to mount its full editor when its dock panel was created, and a
-restored layout creates all of them at startup. Dockview's default renderer
-only detaches a background tab's element, so the editor, its Y.Doc, its
-awareness timer and its sync listener all stayed alive. Measured on the Linux
-release build with 1,500 notes: twelve restored tabs cost about 280 MB in the
-web process, whichever kind of note was active, and hiding the window gave
-back only about 70 MB of it.
+A restored layout creates every dock panel at startup, and dockview's default
+renderer only detaches a background tab's element, so a mounted editor keeps
+its Y.Doc, awareness timer and sync listener alive. On the Linux release build
+with 1,500 notes, twelve restored tabs that all mount their editors cost about
+280 MB in the web process, and hiding the window gives back only about 70 MB.
 
-`mountWhenFirstVisible` (`src/lib/desktop/mount-when-visible.ts`) now mounts a
+`mountWhenFirstVisible` (`src/lib/desktop/mount-when-visible.ts`) mounts a
 panel's editor the first time dockview shows it. Dockview reports a new panel
 as visible until its group has placed it, and a restore activates panels in
 turn, so visibility is only read after the current synchronous work. Tabs the
@@ -203,17 +178,16 @@ undo history.
 
 What makes a parked window's footprint unstable is anything that wakes it. On
 Windows a wake faults trimmed pages back in, and on every platform it adds
-garbage. The largest one was scheduled sync: every 30 seconds while signed
-in, `sync-completed` made the hidden page reload the whole note tree into
-reactive state and re-run the PDF search-index sweep, even when the sync
-changed nothing. With 1,500 notes on Linux that was ~120 ms of CPU and a
-6–30 MB swing in the web process per tick.
+garbage. The largest is scheduled sync: every 30 seconds while signed in,
+`sync-completed` would make the page reload the whole note tree into reactive
+state and re-run the PDF search-index sweep. With 1,500 notes on Linux that is
+~120 ms of CPU and a 6–30 MB swing in the web process per tick.
 
 `deferWhileHidden` (`src/lib/defer-while-hidden.ts`) holds work that only keeps
 the UI current while `document.visibilityState` is hidden, and runs it once
 when the page is shown again. The tree refresh, the PDF sweep and the PDF
 viewer's signature refresh use it; the sync itself still runs in Rust. With
-it, the same hidden window stayed within 1 MB across three minutes of ticks.
+it, the same hidden window stays within 1 MB across three minutes of ticks.
 Use it for any new listener that only refreshes what the user would see.
 
 A visible window reloads the tree only when `sync-completed` says
@@ -296,21 +270,16 @@ process at 0.8 MB before any load:
 | `en_US` (551 kB pair)       | ~2.1 MB  |
 | `de_DE_frami` (4.4 MB pair) | ~18.9 MB |
 
-They used to stay warm for the life of the process after the first check.
-Three things now bound that:
+Three things keep them from staying resident:
 
 - **Idle eviction.** Dropped after three idle minutes
   (`src-tauri/src/spellcheck/mod.rs`), reloaded in ~50 ms on a blocking thread
   when checking resumes.
-- **Not running a shadowed checker at all.** `DiagnosticProvider.kinds` has
-  always existed so that "overlapping providers can be de-conflicted without
-  running them", but `bus.ts` only ever applied ownership when _composing_
-  results. So with the LanguageTool plugin owning spelling, the built-in
-  dictionary was still checked on every keystroke and its findings thrown
-  away — which on desktop is an IPC round trip that pulls those tables back
-  in and keeps them there. The bus now runs a fully-shadowed provider only
-  over the segments the owner left unanswered, which in the healthy case is
-  none of them. The offline fallback is unchanged: if the owner fails, or
+- **Not running a shadowed checker at all.** When a plugin such as
+  LanguageTool owns spelling, `bus.ts` runs the built-in dictionary only over
+  the segments the owner left unanswered, which in the healthy case is none of
+  them. Running it anyway would cost an IPC round trip per keystroke and pull
+  the tables back in. The offline fallback is unchanged: if the owner fails, or
   hangs past the grace, the dictionary is asked and answers.
 - **Explicit release.** When the built-in checker is switched off, every
   language is deselected, or a plugin takes spelling over, the frontend calls
@@ -321,18 +290,14 @@ Three things now bound that:
 
 `e2e-tests/perf/settings-hover-latency.e2e.ts` drives a real WebDriver mouse
 sweep down the settings rail and records both frame intervals and how long
-pointer events sit before JS sees them. Worth reaching for before assuming a
-memory change caused a responsiveness one: when the settings rail was reported
-as lagging, it found two separate things: a 150 ms `transition-colors` fade on
-the rail rows (a design choice, now 75 ms), and a real 7× frame-time
-regression from `--in-process-gpu`, which is why that flag is gone.
+pointer events sit before JS sees them. Reach for it before assuming a memory
+change caused a responsiveness one; it is how the `--in-process-gpu` cost
+above was found.
 
-A warning from getting this wrong once: `MINDSTREAM_E2E_SKIP_BUILD=1` skips
-preflight's binary _copy_ as well as its build, so the T3 harness will happily
-run a stale `mindstream-notes-e2e.exe` and report green. When using that
-flag to iterate, copy `mindstream-notes.exe` over it yourself first — the first
-run of this probe measured the previous build and cleared a regression that was
-really there.
+`MINDSTREAM_E2E_SKIP_BUILD=1` skips preflight's binary _copy_ as well as its
+build, so the T3 harness will happily run a stale `mindstream-notes-e2e.exe`
+and report green. When using that flag to iterate, copy
+`mindstream-notes.exe` over it yourself first.
 
 ## What is not worth chasing
 

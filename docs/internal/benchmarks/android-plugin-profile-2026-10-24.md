@@ -3,27 +3,17 @@
 Performance follow-up: [issue #116](https://github.com/jannikgohr/mindstream-notes/issues/116)
 tracks lock contention, repeated hashing and third-party editor responsiveness.
 
-Follow-up to [physical validation](android-plugin-validation-2026-10-24.md).
-Measured on the same Samsung SM-T733, Android 14/API 34, ARM64, WebView
-156.0.8078.47. Production source is `98ce1e701b217d712c445c6c5b719f71712f2a02`
-(including `b453278b943758d3ffbe0f43a1e826d78b264a0b`); profiling started
-from docs-only commit `6f3e7615`. Temporary timers and a disposable application
-ID were used in a release APK with `tauri/devtools`. No trust checks or the
-1,000 ms runtime budget were removed. Instrumentation was subsequently reverted.
-
-The earlier 68.8 ms p95 across 400 signed echo calls had no internal phase
-timers. It cannot be decomposed retrospectively. The follow-up reproduced
-the expensive stages, with lower total latency: consecutive calls reached
-54.6 ms p95 with timers and 54.7 ms without timers, 100 samples each.
-These are different runs, not a measured performance improvement.
+Follow-up to [physical validation](android-plugin-validation-2026-10-24.md),
+on the same Samsung SM-T733 (Android 14, ARM64, WebView 156) at
+`98ce1e70`. Temporary phase timers ran in a release APK with
+`tauri/devtools`, with all trust checks and the 1,000 ms budget intact; they
+were reverted afterwards. Consecutive signed echo calls reached 54.6 ms p95
+with timers and 54.7 ms without, 100 samples each.
 
 ## Where time goes
 
-Dedicated consecutive signed echo block, 100 calls, 2026-10-25
-00:21:50–00:22:18 UTC for the complete six-block experiment. The table uses
-**means**, which add to the mean total; independently measured p95 phase
-values must not be added. The first block includes its first call after
-several hours idle, which reached 145.2 ms; its median was 52.0 ms.
+100 consecutive signed echo calls. The table uses **means**, which add to the
+mean total; p95 phase values must not be added.
 
 | Stage                                   |    Mean ms | Owner and work                                                                                                                                             |
 | --------------------------------------- | ---------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -35,12 +25,7 @@ several hours idle, which reached 145.2 ms; its median was 52.0 ms.
 | Bridge, dispatch and response residual  |      4.105 | WebView ↔ Tauri boundary, including dispatch before the command timer and serialization/delivery after it                                                  |
 | **Total**                               | **51.342** | JavaScript invoke through promise resolution                                                                                                               |
 
-Rounding may affect the last digit. The residual does not separately measure
-inbound IPC, outbound IPC, JSON serialization or JavaScript scheduling. Wasm
-runs in a worker thread, not a separate plugin OS process. These are wall-clock
-durations, not CPU utilization measurements.
-
-`storage_hash` currently rereads the package and serializes binary file bytes
+`storage_hash` rereads the package and serializes binary file bytes
 as JSON integer arrays before hashing. The separate verified-component snapshot
 also hashes its bytes. This explains why hashing costs more than signature
 verification or guest execution in this small 121,335-byte component.
@@ -62,17 +47,7 @@ the timed invocation; it is a diagnostic, not an optimization to ship.
 Mean catalog-lock time fell from 20.085 ms to 0.247 ms with spacing.
 `RootLock::acquire` sleeps 20 ms when its nonblocking OS lock reports contention.
 The timings and spacing experiment are consistent with this retry cost.
-The competing lock owner was not traced, so its identity and the precise
-cause of the earlier 68.8 ms tail remain unmeasured.
-
-The initial interleaved experiment (100 of each case, after 20 warmup pairs)
-had signed control/profile p95 31.7/52.7 ms and bundled control/profile
-29.5/7.2 ms. Those controls were confounded by call order/lock timing; the
-dedicated blocks above resolve that ambiguity. Instrumentation overhead is
-small in the dedicated blocks but is not a calibrated zero-overhead trace.
-The initial run recorded 729 renderer frame gaps: p95 16.7 ms, maximum
-33.2 ms, and no reported JavaScript long tasks. This is an idle-page async
-probe, not a typing, scrolling, Android frame-timeline or field-INP benchmark.
+The competing lock owner was not traced.
 
 ## Realistic thresholds
 
@@ -96,21 +71,4 @@ visible action. Measure render/typing responsiveness separately. A 70 ms async
 command can be acceptable for an occasional action; it is expensive when
 called repeatedly as part of editing. Prioritize the root-lock retry and
 redundant package serialization/hashing, preserving generation, approval,
-tamper, revocation and lease guarantees. No optimization was implemented here.
-
-## Evidence and restoration
-
-Raw data and reproducible scripts are in the ignored local folder
-`.output/android-plugin-profile-2026-10-24/`: `raw-phases.json`,
-`order-check.json`, `summary.json`, `order-summary.json`, `measure.mjs`,
-`order-check.mjs`, `instrument.py`, `instrumentation.patch` and `profile.rs`.
-The profiling APK SHA-256 is
-`c28ecfd6954194721ee673e32b1c86fb49d44d3230525e7a8e8425463dce1102`.
-The artifact is diagnostic and is not the normal-release validation build.
-`SHA256SUMS` covers the follow-up evidence; its own digest is recorded in
-`SHA256SUMS.sha256`. Original validation evidence was left unchanged.
-
-The synthetic plugin was removed and the original normal signed APK set was
-restored to the disposable application ID. The two pre-existing application
-packages and their data were preserved. Temporary product-source edits were
-reverted; only this report is committed.
+tamper, revocation and lease guarantees.

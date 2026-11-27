@@ -39,30 +39,13 @@ The Windows example reuses Tauri's Common Controls v6 manifest through
 `STATUS_ENTRYPOINT_NOT_FOUND`. Popout creation uses an async command because
 Tauri documents a Windows deadlock for synchronous window creation.
 
-## Windows results
+## Windows result
 
-Environment: Windows build 26300, WebView2 154.0.4258.62, Node 20.19.6,
-Tauri 2.11.1, Rust 1.97.1. The probe uses the production renderer limit flag.
-
-| Check                                   | Observed result                                                                           |
-| --------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Two processes, shared WebView folder    | A and B report the same browser PID. B reads A's marker; A receives B's storage event.    |
-| Two processes, separate WebView folders | Browser PIDs differ. Both initial markers are empty; no cross-vault storage event occurs. |
-| Terminate and restart A with B alive    | Shared mode reads B's marker; isolated mode reads A's own persisted marker.               |
-| Open A's popout through the native UI   | Popout reads A's marker and reports A's browser PID.                                      |
-| Write through A's popout                | A's main window receives the update. B receives none.                                     |
-| Quit A with its popout open             | Both A windows exit; B remains open and accepts another write.                            |
-
-Recorded automatic runs: `shared-PUZMRs` and `isolated-9BZdpS`. Native UI run:
-`isolated-eu3XxM`. Raw results remain under `.output/vault-runtime-spike`.
-An earlier probe iteration reproduced the synchronous-command popout deadlock;
-the final async version passed. WebView2 logged a Chrome window-class cleanup
-warning on graceful exit; worker exits and isolation still completed correctly.
-
-These results support separate WebView2 folders per vault and environment,
-shared by that vault's main window and popouts. They do not prove Linux/macOS
-behavior or IPC/focus/update/shutdown correctness. Renderer counts and memory
-still need measurement with the real editor workload.
+On Windows (WebView2 154), two worker processes sharing one WebView2 folder
+share a browser process and see each other's storage, while separate folders
+keep vaults fully isolated, across restarts and popouts. That is why each vault
+gets its own WebView2 folder, shared by its main window and popouts; the spike
+did not test Linux or macOS, IPC, focus, update or shutdown.
 
 ## macOS compatibility decision
 

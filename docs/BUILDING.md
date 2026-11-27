@@ -1,6 +1,7 @@
 # Building Mindstream Notes
 
-This document collects setup, build, and verification notes that are too detailed for the main README.
+The setup and build steps that are too detailed for the main README. Commit
+conventions, hooks and tests are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Prerequisites
 
@@ -11,7 +12,11 @@ Every platform needs:
   its WebAssembly engine cannot compile the SDK's components.
 - **Rust**, stable toolchain, via [rustup](https://rustup.rs).
 - The **Tauri 2 system dependencies** for your OS — see the per-OS setup below.
-- **Java 21** — only for Android builds.
+- For the browser app (`pnpm dev`), the **Wasm toolchain**: the
+  `wasm32-unknown-unknown` target, `wasm-bindgen-cli` 0.2.126, and Clang with
+  `lld`. [Run the browser app](internal/browser-support.md#run-the-browser-app)
+  has the commands. `pnpm tauri-dev` does not need it.
+- **Java 17** or later, only for Android builds. CI uses 17.
 
 Then install the JS dependencies once with `pnpm install`.
 
@@ -79,7 +84,8 @@ Install JavaScript dependencies:
 pnpm install
 ```
 
-Start the browser development UI:
+Start the browser app. This builds the Wasm storage worker first, then starts
+Vite:
 
 ```shell
 pnpm dev
@@ -98,15 +104,11 @@ Start the Tauri desktop app:
 pnpm tauri-dev
 ```
 
-The desktop development wrapper adds `tauri.dev.conf.json` and the
-`dev-environment` feature. Dev uses the `.dev` bundle identity and a persistent
-separate data root, WebView store and credential namespace. It can run alongside
-a release build. Dev/test builds do not register global shortcuts or install
-autostart/updater plugins. Use the wrapper rather than enabling the dev feature
-with the production config. Optimization level alone does not choose identity.
-Release builds keep the historical root and credential entries. Accounts remain
-vault-specific within each environment. Never run an older binary that lacks
-vault locking against the same physical vault as a new binary.
+`pnpm tauri-dev` runs as a separate `.dev` app with its own data folder and
+credentials, so it can run next to an installed release. It does not register
+global shortcuts or install the autostart and updater plugins. Start it through
+this script rather than enabling the `dev-environment` feature by hand. Never
+point a binary older than vault locking at a vault a newer one uses.
 
 How the desktop app runs its vaults in development, and how to launch an
 isolated test build by hand, is in the
@@ -137,53 +139,8 @@ NO_STRIP=true ARCH=x86_64 pnpm tauri build
 
 ## Android builds
 
-Use Java 21, then run:
+With Java 17 or later, run:
 
 ```shell
 pnpm tauri android build
-```
-
-## Verification
-
-Frontend type and Svelte diagnostics:
-
-```shell
-pnpm check
-```
-
-Frontend tests:
-
-```shell
-pnpm test
-```
-
-Root-level verification:
-
-```shell
-pnpm verify
-```
-
-Tauri Rust tests:
-
-```shell
-cd src-tauri
-cargo test
-```
-
-Tauri Rust clippy:
-
-```shell
-cd src-tauri
-cargo clippy -- -D warnings
-```
-
-## Useful scripts
-
-```text
-pnpm dev              Start Vite
-pnpm build            Build SvelteKit
-pnpm check            Sync SvelteKit, run svelte-check
-pnpm test             Run Vitest
-pnpm tauri-dev        Start the Tauri desktop app
-pnpm tauri-build      Build the Tauri desktop app
 ```
