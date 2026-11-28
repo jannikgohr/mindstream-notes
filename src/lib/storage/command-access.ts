@@ -124,6 +124,10 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   own_key_fingerprint: 'read',
   pdf_note_needs_text: 'read',
   pdf_notes_missing_text: 'read',
+  // Creates the cursor on first use.
+  plugin_events_pending: 'write',
+  plugin_events_commit: 'write',
+  plugin_events_forget: 'write',
   plugins_artifacts_status: 'read',
   plugins_get: 'read',
   plugins_list: 'read',

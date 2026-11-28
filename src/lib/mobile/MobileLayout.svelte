@@ -68,6 +68,7 @@
   import { subscribeOpenNoteRequest } from '$lib/stores/open-note-intent.svelte';
   import { takeOnboardingNote } from '$lib/onboarding/store.svelte';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
+  import { startNoteEvents } from '$lib/plugins/note-events';
   import { pruneHistoryOnStartup } from '$lib/history/retention';
   import { tUi } from '$lib/settings/i18n.svelte';
   import {
@@ -96,6 +97,7 @@
     // Backfill PDF search text for un-indexed PDFs in the background so their
     // content is searchable without opening each one (see search-index-backfill).
     startPdfSearchIndexing();
+    startNoteEvents();
     // Sweep note history past the user's retention window.
     void pruneHistoryOnStartup();
     // Install the browser-history shim so the Android system back

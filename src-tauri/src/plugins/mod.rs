@@ -33,6 +33,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult, CommandResult};
 
 pub mod discovery;
+pub mod events;
 pub mod manifest;
 pub mod packages;
 mod precompiled;
@@ -412,6 +413,8 @@ fn cancel_running(id: &str) {
 fn set_enabled(conn: &Connection, id: &str, enabled: bool) -> AppResult<PluginRecord> {
     if !enabled {
         cancel_running(id);
+        // A disabled plugin is told about every note again once enabled.
+        mindstream_storage_core::note_events::forget(conn, id)?;
     }
     let now = Utc::now().to_rfc3339();
     let changed = conn.execute(
@@ -476,6 +479,7 @@ pub fn set_load_error(conn: &Connection, id: &str, error: Option<&str>) -> AppRe
 /// user re-enables it — surfaced in the plugins UI via `last_load_error`.
 pub fn disable_crashed(conn: &Connection, id: &str, reason: &str) -> AppResult<()> {
     cancel_running(id);
+    mindstream_storage_core::note_events::forget(conn, id)?;
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE plugins SET enabled = 0, last_load_error = ?2, updated_at = ?3 WHERE id = ?1",
@@ -486,6 +490,7 @@ pub fn disable_crashed(conn: &Connection, id: &str, reason: &str) -> AppResult<(
 
 pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
     conn.execute("DELETE FROM plugins WHERE id = ?1", params![id])?;
+    mindstream_storage_core::note_events::forget(conn, id)?;
     Ok(())
 }
 
@@ -531,6 +536,7 @@ fn read_plugin_file(dir: &Path, file: &str) -> AppResult<Option<String>> {
 
 const PERM_PLUGIN_ARTIFACTS_DOWNLOAD: &str = "pluginArtifacts.download";
 const PERM_NATIVE_TOOLS_RUN_DECLARED: &str = "nativeTools.runDeclared";
+const PERM_NOTES_WATCH: &str = "notes.watch";
 const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1030,6 +1036,100 @@ fn note_snapshot(conn: &Connection) -> AppResult<Vec<runtime::host::NoteMeta>> {
         .collect())
 }
 
+/// Run one export of an enabled, approved plugin with the backend's context
+/// merged into `input`. A host crash disables the plugin.
+pub(crate) async fn run_export(
+    app: &AppHandle,
+    id: String,
+    export: String,
+    input: serde_json::Value,
+) -> AppResult<serde_json::Value> {
+    use tauri::Manager;
+    let db = app.state::<Db>();
+    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
+    let third_party_dir = discovery::third_party_plugins_dir(app)?;
+
+    // Register before reading the runnable state, so disabling a plugin also
+    // cancels calls still preparing their context or waiting for a worker.
+    let registration = runtime::cancel::CALLS.register(&id);
+    // Enabled, unmodified since approval, and running under the permissions the
+    // DB pinned — not the ones the manifest currently on disk asks for.
+    let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
+
+    let granted = record.granted_permissions;
+    // Capture everything the script needs from the DB up front, so the blocking
+    // worker needs no DB access. The note snapshot is empty unless the plugin
+    // holds notes.read.
+    let notes = if granted.iter().any(|p| p == "notes.read") {
+        db.with_conn(note_snapshot)?
+    } else {
+        Vec::new()
+    };
+    // Settings, folders and the clock are the backend's to supply — see
+    // `backend_script_context`. The caller's `input` carries only what is
+    // genuinely call-specific (which note, which format, which locale).
+    let mut backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
+    backend_ctx["settings"] = serde_json::to_value(settings::with_defaults(
+        &plugin,
+        db.with_conn(|c| {
+            settings::effective(
+                &crate::paths::app_data_root(app)?,
+                &crate::paths::app_data_dir(app)?,
+                c,
+                &plugin,
+            )
+        })?,
+    ))
+    .map_err(|e| AppError::InvalidArg(e.to_string()))?;
+    let input = merge_script_input(input, backend_ctx);
+    let lease = plugin.lease;
+    let files = plugin.files;
+    let manifest = plugin.manifest;
+    let verified_entry = plugin.entry_bytes;
+    // Compiled components are device-wide, like the packages they come from.
+    let cache_dir = crate::paths::app_data_root(app)
+        .ok()
+        .map(|root| root.join("plugin-cache").join("wasm"));
+    // The plugin's isolated data directory: the cwd for any native tool the
+    // plugin runs, and the root its storage reads and writes under. Resolved here (it needs the AppHandle) so the blocking
+    // worker stays Tauri-free.
+    let data_root = plugin_data_root(app, &id).ok();
+    // Run on a blocking worker: this isolates the guest so a hard crash can't
+    // abort the app. Guest *logic* errors come back as `Ok(Err(..))`
+    // and are just surfaced to the user; a `JoinError` means the host runtime
+    // itself panicked — a crash — so we disable the plugin before returning.
+    let export_label = export.clone();
+    let blocking_job = job.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let _job = blocking_job;
+        let _lease = lease;
+        run_plugin_script(
+            &files,
+            &manifest,
+            ScriptCall {
+                granted,
+                export,
+                input,
+                notes,
+                data_root,
+                cancel: registration.token().clone(),
+                verified_entry,
+                cache_dir,
+            },
+        )
+    })
+    .await;
+    match outcome {
+        Ok(result) => result,
+        Err(join_err) => {
+            let reason = format!("plugin crashed while running '{export_label}': {join_err}");
+            log::error!("[plugins] {reason}");
+            let _ = db.with_conn(|c| disable_crashed(c, &id, &reason));
+            Err(AppError::InvalidArg(reason))
+        }
+    }
+}
+
 // ---------- Tauri commands ----------
 
 // Tauri injects `AppHandle` and `State` into these IPC adapters. The regular
@@ -1430,86 +1530,12 @@ pub fn plugins_settings_remove(app: AppHandle, db: State<'_, Db>, id: String, ke
 #[tauri::command]
 pub async fn plugins_run_script(
     app: AppHandle,
-    db: State<'_, Db>,
     id: String,
     export: String,
     input: serde_json::Value,
 ) -> CommandResult<serde_json::Value> {
-    let job = app.state::<crate::vault_jobs::Jobs>().enter()?;
-    let third_party_dir = discovery::third_party_plugins_dir(&app)?;
-
-    // Register before reading the runnable state, so disabling a plugin also
-    // cancels calls still preparing their context or waiting for a worker.
-    let registration = runtime::cancel::CALLS.register(&id);
-    // Enabled, unmodified since approval, and running under the permissions the
-    // DB pinned — not the ones the manifest currently on disk asks for.
-    let (record, plugin) = db.with_conn(|c| load_runnable(c, &third_party_dir, &id, None))?;
-
-    let granted = record.granted_permissions;
-    // Capture everything the script needs from the DB up front, so the blocking
-    // worker needs no DB access. The note snapshot is empty unless the plugin
-    // holds notes.read.
-    let notes = if granted.iter().any(|p| p == "notes.read") {
-        db.with_conn(note_snapshot)?
-    } else {
-        Vec::new()
-    };
-    // Settings, folders and the clock are the backend's to supply — see
-    // `backend_script_context`. The caller's `input` carries only what is
-    // genuinely call-specific (which note, which format, which locale).
-    let mut backend_ctx = db.with_conn(|c| backend_script_context(c, &id, &granted))?;
-    backend_ctx["settings"] = serde_json::to_value(settings::with_defaults(&plugin, db.with_conn(|c|
-        settings::effective(&crate::paths::app_data_root(&app)?, &crate::paths::app_data_dir(&app)?, c, &plugin)
-    )?)).map_err(|e| AppError::InvalidArg(e.to_string()))?;
-    let input = merge_script_input(input, backend_ctx);
-    let lease = plugin.lease;
-    let files = plugin.files;
-    let manifest = plugin.manifest;
-    let verified_entry = plugin.entry_bytes;
-    // Compiled components are device-wide, like the packages they come from.
-    let cache_dir = crate::paths::app_data_root(&app)
-        .ok()
-        .map(|root| root.join("plugin-cache").join("wasm"));
-    // The plugin's isolated data directory: the cwd for any native tool the
-    // plugin runs, and the root its storage reads and writes under. Resolved here (it needs the AppHandle) so the blocking
-    // worker stays Tauri-free.
-    let data_root = plugin_data_root(&app, &id).ok();
-    // Run on a blocking worker: this isolates the guest so a hard crash can't
-    // abort the app. Guest *logic* errors come back as `Ok(Err(..))`
-    // and are just surfaced to the user; a `JoinError` means the host runtime
-    // itself panicked — a crash — so we disable the plugin before returning.
-    let export_label = export.clone();
-    let blocking_job = job.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let _job = blocking_job;
-        let _lease = lease;
-        run_plugin_script(
-            &files,
-            &manifest,
-            ScriptCall {
-                granted,
-                export,
-                input,
-                notes,
-                data_root,
-                cancel: registration.token().clone(),
-                verified_entry,
-                cache_dir,
-            },
-        )
-    })
-    .await;
-    match outcome {
-        Ok(result) => result.map_err(Into::into),
-        Err(join_err) => {
-            let reason = format!("plugin crashed while running '{export_label}': {join_err}");
-            log::error!("[plugins] {reason}");
-            let _ = db.with_conn(|c| disable_crashed(c, &id, &reason));
-            Err(AppError::InvalidArg(reason).into())
-        }
-    }
+    Ok(run_export(&app, id, export, input).await?)
 }
-
 }
 
 #[cfg(not(coverage))]
