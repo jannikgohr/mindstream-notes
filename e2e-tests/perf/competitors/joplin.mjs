@@ -28,7 +28,7 @@ import {
   sleep,
   until
 } from '../measure.mjs';
-import { app, cache, homeEnv, log, save, setup } from './common.mjs';
+import { app, cache, homeEnv, log, onWindows, save, setup } from './common.mjs';
 
 const { values, vault, label, query } = await setup();
 const { exe, version } = await app('joplin');
@@ -85,8 +85,8 @@ async function main(joplin, expression) {
 async function start() {
   // On Windows its Electron data, and the single-instance lock with it,
   // would stay in %APPDATA% beside a Joplin you may have open.
-  const userData = `--user-data-dir=${join(home, 'electron')}`;
-  const joplin = await launch(exe, ['--no-welcome', userData], {
+  const userData = onWindows(`--user-data-dir=${join(home, 'electron')}`);
+  const joplin = await launch(exe, ['--no-welcome', ...userData], {
     env: homeEnv(home),
     port: 9335,
     pick: (p) => p.evaluate(() => document.title.startsWith('Joplin'))

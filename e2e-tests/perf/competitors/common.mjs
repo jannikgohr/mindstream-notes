@@ -156,6 +156,13 @@ export async function app(name) {
 }
 
 /**
+ * Launch flags only Windows runs get, so Linux runs keep the conditions of
+ * the recorded Linux results.
+ */
+export const onWindows = (...flags) =>
+  process.platform === 'win32' ? flags : [];
+
+/**
  * Environment that points an app's home at `home`: HOME on Linux,
  * USERPROFILE on Windows, where Node's os.homedir() reads it.
  */
