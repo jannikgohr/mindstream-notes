@@ -83,8 +83,10 @@ Mindstream's search includes its 100 ms debounce.
 
 - No GPU: all apps rasterise in software, so frame rates are low across the
   board and will differ on real hardware.
-- The browser build stores data in OPFS through WebAssembly; the desktop app's
-  native SQLite may import and search faster.
+- The browser build stores data in OPFS through WebAssembly. The
+  [Windows run](competitors-windows-2026-11-28.md) measured the desktop app
+  too: its native SQLite imports 30 % faster and searches 25 % faster, and
+  on a GPU the zoom stalls above disappear.
 - Joplin's plain Markdown importer keeps front matter as text, so it imported
   no tags. Logseq got paragraphs turned into bullets, as it drops the rest.
 - Another session's builds ran on the VM at times, and the Logseq vault was
