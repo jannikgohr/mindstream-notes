@@ -103,8 +103,8 @@ function run(command, args, { capture = false } = {}) {
     const child = spawn(command, args, {
       cwd: root,
       stdio: ['ignore', capture ? 'pipe' : 'inherit', 'inherit'],
-      // pnpm is a .cmd script there.
-      shell: process.platform === 'win32'
+      // pnpm is a .cmd script there, which only a shell runs.
+      shell: process.platform === 'win32' && command === 'pnpm'
     });
     let output = '';
     child.stdout?.on('data', (chunk) => (output += chunk));
@@ -190,25 +190,11 @@ const save = () =>
 if (values.json) await mkdir(dirname(values.json), { recursive: true });
 
 // Times every storage request, and the graph layout worker's last update:
-// it stops posting once its layout has settled. Storage is the sqlite worker
-// in the browser build and IPC commands in the desktop app.
+// it stops posting once its layout has settled. The desktop app's storage
+// is timed from outside, in `timeIpc`.
 function instrument() {
   const Native = window.Worker;
   window.__bench = { storage: [], layoutAt: 0, layoutMessages: 0 };
-  const tauri = window.__TAURI_INTERNALS__;
-  if (tauri) {
-    const invoke = tauri.invoke;
-    tauri.invoke = async (command, ...rest) => {
-      const start = performance.now();
-      try {
-        return await invoke(command, ...rest);
-      } finally {
-        const ms = Math.round(performance.now() - start);
-        if (ms > 100) window.__bench.storage.push(`${command} ${ms}`);
-        if (ms > 500) console.log(`[bench] ipc ${command}: ${ms} ms`);
-      }
-    };
-  }
   window.Worker = class extends Native {
     constructor(url, options) {
       super(url, options);
@@ -250,6 +236,29 @@ const webviewArgs = JSON.parse(
   await readFile(join(root, 'src-tauri/tauri.conf.json'), 'utf8')
 ).app.windows[0].additionalBrowserArgs;
 
+// Tauri's invoke can't be wrapped, but on Windows each call is a request
+// to ipc.localhost, which the DevTools protocol sees.
+const ipcSlow = [];
+function timeIpc(page) {
+  ipcSlow.length = 0;
+  const started = new Map();
+  page.on('request', (request) => {
+    if (request.url().startsWith('http://ipc.localhost/'))
+      started.set(request, performance.now());
+  });
+  page.on('requestfinished', (request) => {
+    const t = started.get(request);
+    if (t === undefined) return;
+    started.delete(request);
+    const ms = Math.round(performance.now() - t);
+    const command = decodeURIComponent(
+      new URL(request.url()).pathname.slice(1)
+    );
+    if (ms > 100) ipcSlow.push(`${command} ${ms}`);
+    if (ms > 500) console.error(`[bench] ipc ${command}: ${ms} ms`);
+  });
+}
+
 async function startNative() {
   const app = await launch(values.exe, [], {
     portFlag: false,
@@ -278,6 +287,7 @@ async function startNative() {
   try {
     await page.setViewportSize({ width: 1600, height: 1000 });
     await page.evaluate(instrument);
+    timeIpc(page);
   } catch (error) {
     await app.close();
     throw error;
@@ -513,7 +523,9 @@ try {
   results.graphLateZoomFrames = await frames(page, 2000);
   results.heapMB.graphLate = await heap(page);
   results.pssMB.graphLate = pssMB(app.proc.pid);
-  results.slowStorage = await page.evaluate(() => window.__bench.storage);
+  results.slowStorage = values.native
+    ? ipcSlow
+    : await page.evaluate(() => window.__bench.storage);
 } finally {
   await app.close();
   server.stop();
