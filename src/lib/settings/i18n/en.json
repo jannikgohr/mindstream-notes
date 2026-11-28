@@ -1626,7 +1626,12 @@
     },
     "general.trayIcon": {
       "label": "Tray icon",
-      "description": "Automatic uses the colour icon on Windows, matches the menu bar on macOS and follows your light or dark mode on Linux. Light and dark name the icon's colour, so pick light for a dark panel."
+      "description": "Light and dark name the icon's colour, so pick light for a dark panel.",
+      "descriptionByPlatform": {
+        "windows": "Automatic uses the colour icon. Light and dark name the icon's colour, so pick light for a dark taskbar.",
+        "macos": "Automatic matches the menu bar's light or dark look. Light and dark name the icon's colour.",
+        "linux": "Automatic follows your light or dark mode. Light and dark name the icon's colour, so pick light for a dark panel."
+      }
     },
     "general.previewTabs": {
       "label": "Preview tabs",
