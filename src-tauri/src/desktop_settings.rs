@@ -170,7 +170,7 @@ pub enum DesktopThemeMode {
     System,
 }
 
-/// Light and dark name the icon's colour, not the panel it suits.
+/// Light and dark name the icon's colour. The labels name the mode it suits.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TrayIconStyle {

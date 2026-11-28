@@ -1620,11 +1620,11 @@
     },
     "general.trayIcon": {
       "label": "Symbol in der Systemablage",
-      "description": "Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Leiste wähle hell.",
+      "description": "Automatisch wählt das Symbol, das zu deinem System passt.",
       "descriptionByPlatform": {
-        "windows": "Automatisch zeigt das farbige Symbol. Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Taskleiste wähle hell.",
-        "macos": "Automatisch passt sich dem hellen oder dunklen Aussehen der Menüleiste an. Hell und dunkel beschreiben die Farbe des Symbols.",
-        "linux": "Automatisch folgt deinem hellen oder dunklen Modus. Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Leiste wähle hell."
+        "windows": "Automatisch zeigt das farbige Symbol.",
+        "macos": "Automatisch passt sich dem hellen oder dunklen Aussehen der Menüleiste an.",
+        "linux": "Automatisch folgt deinem hellen oder dunklen Modus. Die obere Leiste von GNOME bleibt auch im hellen Modus dunkel."
       }
     },
     "general.previewTabs": {
@@ -1927,8 +1927,8 @@
     "general.vaultOpening.newWindow": "Neues Fenster",
     "general.trayIcon.automatic": "Automatisch",
     "general.trayIcon.color": "Farbig",
-    "general.trayIcon.monochromeLight": "Einfarbig hell",
-    "general.trayIcon.monochromeDark": "Einfarbig dunkel",
+    "general.trayIcon.monochromeLight": "Dunkler Modus",
+    "general.trayIcon.monochromeDark": "Heller Modus",
     "hotkeys.preset.mindstream": "Mindstream-Standard",
     "hotkeys.preset.notion": "Wie in Notion",
     "hotkeys.preset.google-docs": "Wie in Google Docs"
