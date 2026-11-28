@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   /**
    * Note browser body: filters the tree by the active view + folder,
@@ -188,6 +189,14 @@
     filterNodesByTags(nodes, tree.notesById, tagFilter.tags)
   );
   const filtering = $derived(tagFilter.tags.length > 0);
+  // A selection must not carry rows the filter hides into a batch action.
+  const filterKey = $derived(tagFilter.tags.join('\n'));
+  let selectedFilterKey = untrack(() => filterKey);
+  $effect(() => {
+    if (filterKey === selectedFilterKey) return;
+    selectedFilterKey = filterKey;
+    clearMobileBatchSelection();
+  });
   const visibleItems = $derived<MobileBatchItem[]>(
     visible.map((node) => ({ kind: node.kind, id: node.id }))
   );

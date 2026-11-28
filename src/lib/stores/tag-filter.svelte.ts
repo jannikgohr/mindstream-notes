@@ -32,7 +32,7 @@ export function showTagFilterControl(): () => void {
 
 /** The tags a new note takes so it stays in the filtered view. */
 export function tagsForNewNote(): readonly string[] {
-  return shownControls > 0 ? tagFilter.tags : [];
+  return shownControls > 0 ? [...tagFilter.tags] : [];
 }
 
 /** A note matches when it has every selected tag; `work` covers `work/urgent`. */

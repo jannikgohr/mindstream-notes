@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { createMenuBuilder } from './file-explorer-menu';
   import {
@@ -335,9 +335,17 @@
     clearFileTreeInteractionState();
   });
 
+  // A selection must not carry rows the filter hides into a batch action.
+  let selectedFilterKey = untrack(() => filterKey);
+  $effect(() => {
+    if (filterKey === selectedFilterKey) return;
+    selectedFilterKey = filterKey;
+    clearFileTreeInteractionState();
+  });
+
   function startDraft(kind: DraftKind, parentId: string | null) {
     if (!canStartDraft(parentId)) return;
-    if (parentId) expanded[parentId] = true;
+    if (parentId) openFolder(parentId);
     const text = defaultDraftText(kind);
     draft = {
       kind,
@@ -357,7 +365,7 @@
     parentId: string | null
   ) {
     if (!canStartDraft(parentId)) return;
-    if (parentId) expanded[parentId] = true;
+    if (parentId) openFolder(parentId);
     const text = pluginTemplateDefaultTitle(pluginId, templateId);
     draft = {
       kind: 'note',
@@ -825,10 +833,7 @@
     clearTimeout(springTimer);
     springFolderId = folderId;
     if (folderId) {
-      springTimer = setTimeout(
-        () => (expanded[folderId] = true),
-        SPRING_OPEN_MS
-      );
+      springTimer = setTimeout(() => openFolder(folderId), SPRING_OPEN_MS);
     }
   }
 
@@ -875,7 +880,7 @@
     springOpen(null);
     const pdfs = droppedPdfFiles(e);
     if (pdfs.length === 0 || !canStartDraft(parentId)) return;
-    if (parentId) expanded[parentId] = true;
+    if (parentId) openFolder(parentId);
     void importDroppedPdfs(pdfs, parentId, onOpenNote);
   }
   /** A drop on a note lands next to it. */
@@ -958,18 +963,24 @@
     await moveManyTo(items, targetFolderId).catch(toastRefusal);
   }
 
-  function toggleFolder(id: string) {
+  function setFolderOpen(id: string, open: boolean) {
     if (!filtering) {
-      expanded[id] = !expanded[id];
+      expanded[id] = open;
       return;
     }
     const ids =
       closedWhileFiltering.key === filterKey
         ? { ...closedWhileFiltering.ids }
         : {};
-    if (ids[id]) delete ids[id];
+    if (open) delete ids[id];
     else ids[id] = true;
     closedWhileFiltering = { key: filterKey, ids };
+  }
+  function openFolder(id: string) {
+    setFolderOpen(id, true);
+  }
+  function toggleFolder(id: string) {
+    setFolderOpen(id, !openFolders[id]);
   }
   function emptyStateMessage(): string {
     if (filtering) return tUi('tagFilter.noMatches');
