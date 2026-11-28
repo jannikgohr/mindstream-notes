@@ -72,10 +72,17 @@ describe('openOrCreateNote', () => {
     expect(requestOpenNote).toHaveBeenCalledWith('daily');
   });
 
+  // Its tags argument is `[]`: a journal entry doesn't take the tag filter.
   it('creates a blank markdown note when there is none', async () => {
     await openOrCreateNote({ title: 'Day', parentId: 'journal' });
 
-    expect(createNoteIn).toHaveBeenCalledWith('journal', 'Day', 'markdown');
+    expect(createNoteIn).toHaveBeenCalledWith(
+      'journal',
+      'Day',
+      'markdown',
+      undefined,
+      []
+    );
     expect(requestOpenNote).toHaveBeenCalledWith('new-note');
   });
 
@@ -101,7 +108,8 @@ describe('openOrCreateNote', () => {
       'journal',
       '2026-11-23',
       'kanban',
-      'rendered'
+      'rendered',
+      []
     );
   });
 
@@ -113,7 +121,13 @@ describe('openOrCreateNote', () => {
     });
 
     expect(renderUserTemplateBody).not.toHaveBeenCalled();
-    expect(createNoteIn).toHaveBeenCalledWith(null, 'Day', 'markdown');
+    expect(createNoteIn).toHaveBeenCalledWith(
+      null,
+      'Day',
+      'markdown',
+      undefined,
+      []
+    );
   });
 
   it('creates a blank note when the Templates plugin is disabled', async () => {
@@ -127,7 +141,13 @@ describe('openOrCreateNote', () => {
     });
 
     expect(renderUserTemplateBody).not.toHaveBeenCalled();
-    expect(createNoteIn).toHaveBeenCalledWith(null, 'Day', 'markdown');
+    expect(createNoteIn).toHaveBeenCalledWith(
+      null,
+      'Day',
+      'markdown',
+      undefined,
+      []
+    );
   });
 
   it('creates one note when the same note is asked for twice at once', async () => {

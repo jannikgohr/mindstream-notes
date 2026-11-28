@@ -243,7 +243,13 @@ describe('runPluginEffect', () => {
       undefined,
       { defaultParentId: 'f1' }
     );
-    expect(h.createNoteIn).toHaveBeenCalledWith('f1', 'Day', 'markdown');
+    expect(h.createNoteIn).toHaveBeenCalledWith(
+      'f1',
+      'Day',
+      'markdown',
+      undefined,
+      []
+    );
   });
 
   it('opens only a tab view the plugin itself contributes', async () => {

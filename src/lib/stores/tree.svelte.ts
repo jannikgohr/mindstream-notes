@@ -33,6 +33,7 @@ import {
 import { flushPendingEditorSaves } from '$lib/editor/suspend-flush';
 import { ancestorIsTrash } from '$lib/editor/trash';
 import { tUi } from '$lib/settings/i18n.svelte';
+import { tagsForNewNote } from './tag-filter.svelte';
 
 class TreeState {
   // Raw: replaced whole on every change, never patched in place. A deep
@@ -109,18 +110,25 @@ registerVaultAccessProbe(ensureTreeLoaded);
 
 // ---------- Notes ----------
 
+/**
+ * `tags` defaults to the tag filter on screen, so a note created while
+ * filtering stays in the view it was created from. Pass `[]` for a note that
+ * isn't.
+ */
 export async function createNoteIn(
   parentId: string | null,
   title?: string,
   noteKind?: NoteKind,
-  body?: string
+  body?: string,
+  tags: readonly string[] = tagsForNewNote()
 ): Promise<string> {
-  const note = await api.createNote({
+  const created = await api.createNote({
     parent_collection_id: parentId,
     title,
     note_kind: noteKind,
     body
   });
+  const note = await withTags(created, tags);
   await applyNoteSummary(note);
   // Live collab keys live on the etebase server — the per-note crypto_key
   // doesn't exist locally until the first push, and the room id is the
@@ -154,11 +162,12 @@ export async function importPdfIn(
   const title =
     file.name.replace(/\.pdf$/i, '').trim() ||
     tUi('fileTree.fallback.pdfTitle');
-  const note = await api.importPdfNoteBytes({
+  const imported = await api.importPdfNoteBytes({
     parent_collection_id: parentId,
     title,
     bytes: raw
   });
+  const note = await withTags(imported, tagsForNewNote());
   await applyNoteSummary(note);
   // Index the PDF's text for cross-note search. Derived/local-only, so it
   // runs off the import path and failures are non-fatal (the background
@@ -539,6 +548,16 @@ function renameNode(nodes: TreeNode[], id: string, name: string): TreeNode[] {
 }
 
 /** Apply the command result without fetching every note and tag in the vault. */
+// Tagged before the note reaches the tree, so it never blinks out of a
+// filtered view, and before the first sync, which pushes it tagged.
+async function withTags(
+  note: api.Note,
+  tags: readonly string[]
+): Promise<api.Note> {
+  if (tags.length === 0) return note;
+  return api.saveNote({ id: note.id, tags: normalizeTags([...tags]) });
+}
+
 async function applyNoteSummary(note: api.Note): Promise<void> {
   const {
     body: _body,
