@@ -26,7 +26,7 @@ import {
   until,
   zoom
 } from '../measure.mjs';
-import { app, cache, log, save, setup } from './common.mjs';
+import { app, cache, log, onWindows, save, setup } from './common.mjs';
 
 const { values, vault, label, query } = await setup({
   graph: { type: 'string' },
@@ -65,10 +65,13 @@ if (values.graph) {
 
 async function start() {
   // XDG_CONFIG_HOME moves it on Linux, --user-data-dir on Windows.
-  const userData = `--user-data-dir=${join(config, 'obsidian')}`;
+  const windowsFlags = onWindows(
+    `--user-data-dir=${join(config, 'obsidian')}`,
+    ...foreground
+  );
   const started = await launch(
     exe,
-    ['--window-size=1600,1000', userData, ...foreground],
+    ['--window-size=1600,1000', ...windowsFlags],
     {
       env: { XDG_CONFIG_HOME: config },
       port: 9333,

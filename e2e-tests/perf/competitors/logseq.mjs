@@ -29,7 +29,7 @@ import {
   until,
   zoom
 } from '../measure.mjs';
-import { app, cache, homeEnv, log, save, setup } from './common.mjs';
+import { app, cache, homeEnv, log, onWindows, save, setup } from './common.mjs';
 
 const { values, vault, label, query } = await setup();
 const { exe, version } = await app('logseq');
@@ -97,8 +97,7 @@ const start = () =>
     exe,
     [
       '--window-size=1600,1000',
-      `--user-data-dir=${join(home, 'electron')}`,
-      ...foreground
+      ...onWindows(`--user-data-dir=${join(home, 'electron')}`, ...foreground)
     ],
     {
       env: homeEnv(home),
