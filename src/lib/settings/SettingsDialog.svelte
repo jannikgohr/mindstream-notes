@@ -20,7 +20,7 @@
     settingsDialog
   } from './store.svelte';
   import { FALLBACK_ICON, SETTINGS_ICONS } from './icons';
-  import { i18n, tLabel, tUi } from './i18n.svelte';
+  import { tDescription, tLabel, tUi } from './i18n.svelte';
   import type { Category, Section, Setting } from './types';
   import {
     groupedCommands,
@@ -149,7 +149,7 @@
     const haystack = [
       s.id,
       tLabel('settings', s.id),
-      i18n.bundle.settings?.[s.id]?.description ?? ''
+      tDescription('settings', s.id) ?? ''
     ]
       .join(' ')
       .toLowerCase();

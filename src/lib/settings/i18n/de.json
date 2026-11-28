@@ -1620,7 +1620,12 @@
     },
     "general.trayIcon": {
       "label": "Symbol in der Systemablage",
-      "description": "Automatisch zeigt unter Windows das farbige Symbol, passt sich unter macOS der Menüleiste an und folgt unter Linux dem hellen oder dunklen Modus. Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Leiste wähle hell."
+      "description": "Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Leiste wähle hell.",
+      "descriptionByPlatform": {
+        "windows": "Automatisch zeigt das farbige Symbol. Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Taskleiste wähle hell.",
+        "macos": "Automatisch passt sich dem hellen oder dunklen Aussehen der Menüleiste an. Hell und dunkel beschreiben die Farbe des Symbols.",
+        "linux": "Automatisch folgt deinem hellen oder dunklen Modus. Hell und dunkel beschreiben die Farbe des Symbols: Für eine dunkle Leiste wähle hell."
+      }
     },
     "general.previewTabs": {
       "label": "Vorschau-Tabs",
