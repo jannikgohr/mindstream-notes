@@ -51,6 +51,8 @@ export async function openOrCreateNote(
   return id;
 }
 
+// A named note such as today's journal entry, not one made for the filtered
+// view, so it doesn't take the tag filter.
 async function createNote({
   title,
   parentId,
@@ -65,14 +67,14 @@ async function createNote({
     !renders ||
     noteIsUnderTrash(source, tree.collectionsById)
   ) {
-    return createNoteIn(parentId, title, 'markdown');
+    return createNoteIn(parentId, title, 'markdown', undefined, []);
   }
   const body = await renderUserTemplateBody(
     source.id,
     templateAnchor(template.date),
     title
   );
-  return createNoteIn(parentId, title, source.note_kind as NoteKind, body);
+  return createNoteIn(parentId, title, source.note_kind as NoteKind, body, []);
 }
 
 /** `YYYY-MM-DD` at the current time of day, so `{{time}}` still reads as now. */
