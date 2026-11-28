@@ -97,6 +97,7 @@ import {
   trashCollection,
   trashNote
 } from './tree.svelte';
+import { showTagFilterControl, tagFilter } from './tag-filter.svelte';
 
 import type { NoteSummary, TreeNode } from '$lib/api';
 import { listen, TauriEventName } from '$lib/api/events';
@@ -337,6 +338,46 @@ describe('createNoteIn / importPdfIn', () => {
       note_kind: 'markdown'
     });
     expect(id).toBe('note_new');
+  });
+
+  describe('while a tag filter is on', () => {
+    let hideControl = () => {};
+    beforeEach(() => {
+      tree.ready = true;
+      tagFilter.tags = ['work', 'home'];
+      hideControl = showTagFilterControl();
+    });
+    afterEach(() => {
+      hideControl();
+      tagFilter.tags = [];
+    });
+
+    it('tags a new note so it stays in the filtered view', async () => {
+      const id = await createNoteIn(null, 'Hello', 'markdown');
+      expect(saveNoteMock).toHaveBeenCalledWith({
+        id: 'note_new',
+        tags: ['work', 'home']
+      });
+      expect(tree.notesById[id].tags).toEqual(['work', 'home']);
+    });
+
+    it('tags an imported PDF', async () => {
+      const file = new File([new Uint8Array([1])], 'Paper.pdf');
+      const id = await importPdfIn(null, file);
+      expect(tree.notesById[id].tags).toEqual(['work', 'home']);
+    });
+
+    it('leaves a note untagged while no filter control is on screen', async () => {
+      hideControl();
+      await createNoteIn(null, 'In the journal view', 'markdown');
+      await importPdfIn(null, new File([new Uint8Array([1])], 'Paper.pdf'));
+      expect(saveNoteMock).not.toHaveBeenCalled();
+    });
+
+    it('leaves a note untagged when the caller passes no tags', async () => {
+      await createNoteIn(null, 'Today', 'markdown', undefined, []);
+      expect(saveNoteMock).not.toHaveBeenCalled();
+    });
   });
 
   it('imports a PDF, deriving the title from the filename', async () => {

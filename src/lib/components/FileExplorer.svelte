@@ -33,6 +33,7 @@
   import { menuItemForShortcut } from './context-menu-shortcuts';
   import { alert, confirm } from './confirm-dialog.svelte';
   import SortControl from './SortControl.svelte';
+  import TagFilterControl from './TagFilterControl.svelte';
   import VaultSwitcher from './VaultSwitcher.svelte';
   import PluginIcon from '$lib/plugins/PluginIcon.svelte';
   import PluginSidebarView from '$lib/plugins/PluginSidebarView.svelte';
@@ -56,6 +57,11 @@
   } from './file-tree-expansion';
   import { profilesState } from '$lib/stores/profiles.svelte';
   import { sortTree } from '$lib/sort';
+  import {
+    clearTagFilter,
+    filterNodesByTags,
+    tagFilter
+  } from '$lib/stores/tag-filter.svelte';
   import {
     tree,
     createCollectionIn,
@@ -181,7 +187,7 @@
     if (source.startsWith('plugin:') && !pluginView) onSourceChange?.('home');
   });
 
-  const sourceNodes = $derived(
+  const allSourceNodes = $derived(
     nodesForDesktopSource(
       source,
       sortedTree,
@@ -189,6 +195,34 @@
       tree.collectionsById
     )
   );
+  const sourceNodes = $derived(
+    filterNodesByTags(allSourceNodes, tree.notesById, tagFilter.tags)
+  );
+
+  // Folders open while a tag filter is on, so its matches show. A folder
+  // closed meanwhile stays closed until the filter changes; the saved open
+  // folders are left alone.
+  const filtering = $derived(tagFilter.tags.length > 0);
+  const filterKey = $derived(tagFilter.tags.join('\n'));
+  let closedWhileFiltering = $state<{
+    key: string;
+    ids: Record<string, true>;
+  }>({ key: '', ids: {} });
+  const openFolders = $derived.by(() => {
+    if (!filtering) return expanded;
+    const closed =
+      closedWhileFiltering.key === filterKey ? closedWhileFiltering.ids : {};
+    const open: Record<string, boolean> = {};
+    const walk = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        if (node.kind !== 'folder') continue;
+        if (!closed[node.id]) open[node.id] = true;
+        walk(node.children);
+      }
+    };
+    walk(sourceNodes);
+    return open;
+  });
   // Home-only gates: the top toolbar create buttons, the root-level draft, and
   // the drop-to-root target. None of these apply in the Shared view (you can't
   // create a new shared root, and a root drop = pulling an item out of its share
@@ -202,7 +236,10 @@
   // Dropped PDFs import into the folder under the pointer, in Home only: the
   // other views fall through to the window-level import at the vault root.
   const fileDropAccept = $derived(canCreate ? PDF_ACCEPT : undefined);
-  const trashItemCount = $derived(source === 'trash' ? sourceNodes.length : 0);
+  // Emptying the trash removes everything in it, filtered out or not.
+  const trashItemCount = $derived(
+    source === 'trash' ? allSourceNodes.length : 0
+  );
 
   // ---------- Per-scope edit capabilities (Shared view) ----------
   // In Home everything is editable as before. In the Shared view an item is only
@@ -672,7 +709,7 @@
     const result = updateSelectionForClick(
       selectedKeys,
       key,
-      visibleSelectionKeys(sourceNodes, expanded),
+      visibleSelectionKeys(sourceNodes, openFolders),
       selectionAnchor,
       activeKey,
       {
@@ -922,9 +959,20 @@
   }
 
   function toggleFolder(id: string) {
-    expanded[id] = !expanded[id];
+    if (!filtering) {
+      expanded[id] = !expanded[id];
+      return;
+    }
+    const ids =
+      closedWhileFiltering.key === filterKey
+        ? { ...closedWhileFiltering.ids }
+        : {};
+    if (ids[id]) delete ids[id];
+    else ids[id] = true;
+    closedWhileFiltering = { key: filterKey, ids };
   }
   function emptyStateMessage(): string {
+    if (filtering) return tUi('tagFilter.noMatches');
     return emptyStateMessageForSource(source, tUi('fileTree.emptyRoot'));
   }
 
@@ -1106,15 +1154,18 @@
                 ?.labelKey ?? 'fileTree.notes'
             )}</span
       >
-      <SortControl
-        strategy={ui.sortStrategy}
-        direction={ui.sortDirection}
-        onStrategyChange={setSortStrategy}
-        onDirectionChange={setSortDirection}
-        variant="ghost"
-        compact
-        collapsed
-      />
+      <div class="flex shrink-0 items-center gap-0.5">
+        <TagFilterControl />
+        <SortControl
+          strategy={ui.sortStrategy}
+          direction={ui.sortDirection}
+          onStrategyChange={setSortStrategy}
+          onDirectionChange={setSortDirection}
+          variant="ghost"
+          compact
+          collapsed
+        />
+      </div>
     </div>
     <div
       bind:this={treeEl}
@@ -1142,6 +1193,14 @@
         <p class="px-2 py-3 text-xs text-muted-foreground">
           {emptyStateMessage()}
         </p>
+        {#if filtering}
+          <Button
+            variant="ghost"
+            size="sm"
+            class="mx-1 h-7 px-2 text-xs"
+            onclick={clearTagFilter}>{tUi('tagFilter.clear')}</Button
+          >
+        {/if}
       {/if}
 
       {#each sourceNodes as node (nodeKey(node))}
@@ -1279,7 +1338,7 @@
       class="flex min-h-7 w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-left ring-offset-background hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       class:bg-accent={isOver || isSelected}
       class:opacity-60={drag?.kind === 'folder' && drag.id === node.id}
-      aria-expanded={expanded[node.id] === true}
+      aria-expanded={openFolders[node.id] === true}
       onclick={(e) => {
         // The rename input sits inside this button. WebKit activates the
         // button on a space typed into it, and a click there places the
@@ -1296,11 +1355,11 @@
       ondrop={(e) => onTreeDrop(e, node.id)}
     >
       <ChevronRight
-        class={`size-3.5 shrink-0 transition-transform ${expanded[node.id] ? 'rotate-90' : ''} ${node.children.length === 0 ? 'invisible' : ''}`}
+        class={`size-3.5 shrink-0 transition-transform ${openFolders[node.id] ? 'rotate-90' : ''} ${node.children.length === 0 ? 'invisible' : ''}`}
       />
       <!-- Folders are amber so the tree's structure reads at a glance without
            competing with the brand colour that marks the open note. -->
-      {#if expanded[node.id]}
+      {#if openFolders[node.id]}
         <FolderOpen class="size-3.5 shrink-0 text-folder-icon" />
       {:else}
         <Folder class="size-3.5 shrink-0 text-folder-icon" />
@@ -1317,7 +1376,7 @@
         {/if}
       {/if}
     </button>
-    {#if expanded[node.id]}
+    {#if openFolders[node.id]}
       <div class="ml-3 border-l border-border pl-1">
         {#each node.children as child (nodeKey(child))}
           {@render renderNode(child)}
