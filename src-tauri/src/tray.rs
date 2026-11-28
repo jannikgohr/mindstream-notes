@@ -10,7 +10,7 @@ use tauri::{
 use crate::{
     app_events::AppEvent,
     db::Db,
-    desktop_settings::DesktopSettings,
+    desktop_settings::{DesktopSettings, TrayIconStyle},
     environment::{self, Kind},
     hotkeys::GlobalShortcutCommandId,
     i18n,
@@ -19,6 +19,8 @@ use crate::{
 
 #[cfg(target_os = "linux")]
 mod linux_menu;
+#[cfg(target_os = "linux")]
+mod linux_panel;
 
 const TRAY_ID: &str = "main-tray";
 const NEW_NOTE_ID: &str = "new_note";
@@ -29,6 +31,32 @@ const QUIT_ID: &str = "quit";
 const VAULT_ID: &str = "active_vault";
 const DEV_ID: &str = "dev_environment";
 const DEV_NAME: &str = "Mindstream Notes Dev";
+const MONOCHROME_LIGHT: &[u8] = include_bytes!("../icons/tray/app-light.png");
+const MONOCHROME_DARK: &[u8] = include_bytes!("../icons/tray/app-dark.png");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrayArt {
+    Color,
+    Light,
+    Dark,
+    /// macOS tints a template image to match the menu bar.
+    Template,
+}
+
+/// Only Linux has to guess the panel colour: its tray shows the image as is.
+fn tray_art(style: TrayIconStyle, os: &str, dark_panel: impl FnOnce() -> bool) -> TrayArt {
+    match style {
+        TrayIconStyle::Color => TrayArt::Color,
+        TrayIconStyle::MonochromeLight => TrayArt::Light,
+        TrayIconStyle::MonochromeDark => TrayArt::Dark,
+        TrayIconStyle::Automatic => match os {
+            "macos" => TrayArt::Template,
+            "linux" if dark_panel() => TrayArt::Light,
+            "linux" => TrayArt::Dark,
+            _ => TrayArt::Color,
+        },
+    }
+}
 
 // Direct-mode windows publish accelerator hints through the frontend. The
 // coordinator tray has no editor-local binding cache and leaves these unset.
@@ -87,6 +115,7 @@ struct TrayMenuItems {
     new_ink: IconMenuItem<tauri::Wry>,
     new_diagram: IconMenuItem<tauri::Wry>,
     quit: IconMenuItem<tauri::Wry>,
+    art: Mutex<Option<TrayArt>>,
 }
 
 pub fn init(app: &App) -> tauri::Result<()> {
@@ -94,7 +123,9 @@ pub fn init(app: &App) -> tauri::Result<()> {
         .try_state::<environment::Environment>()
         .map(|environment| environment.kind)
         .unwrap_or_else(environment::kind);
-    let icon = app.default_window_icon().map(|icon| tray_icon(icon, kind));
+    let icon = app
+        .default_window_icon()
+        .map(|icon| tray_icon(icon, kind, false));
     let dev = if kind == Kind::Dev {
         Some(IconMenuItem::with_id(
             app,
@@ -204,8 +235,15 @@ pub fn init(app: &App) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = icon {
-        builder = builder.icon(icon);
+    let style = app
+        .try_state::<DesktopSettings>()
+        .map(|settings| settings.tray_icon())
+        .unwrap_or_default();
+    let art = tray_art(style, std::env::consts::OS, panel_is_dark);
+    if let Some(icon) = tray_image(app.handle(), art, kind) {
+        builder = builder
+            .icon(icon)
+            .icon_as_template(art == TrayArt::Template);
     }
 
     app.manage(TrayMenuItems {
@@ -218,15 +256,76 @@ pub fn init(app: &App) -> tauri::Result<()> {
         new_ink: new_ink.clone(),
         new_diagram: new_diagram.clone(),
         quit: quit.clone(),
+        art: Mutex::new(Some(art)),
     });
 
     builder.build(app)?;
+    #[cfg(target_os = "linux")]
+    linux_panel::watch(app.handle().clone());
     sync_platform_menu(app.handle());
     sync_vault_name(app.handle());
     Ok(())
 }
 
-fn tray_icon(icon: &Image<'_>, kind: Kind) -> Image<'static> {
+fn panel_is_dark() -> bool {
+    #[cfg(target_os = "linux")]
+    return linux_panel::is_dark();
+    #[cfg(not(target_os = "linux"))]
+    true
+}
+
+fn tray_image(app: &AppHandle, art: TrayArt, kind: Kind) -> Option<Image<'static>> {
+    let base = match art {
+        TrayArt::Color => app.default_window_icon()?.clone(),
+        TrayArt::Light => Image::from_bytes(MONOCHROME_LIGHT).ok()?,
+        TrayArt::Dark | TrayArt::Template => Image::from_bytes(MONOCHROME_DARK).ok()?,
+    };
+    Some(tray_icon(&base, kind, art == TrayArt::Template))
+}
+
+/// Settings changes and Linux colour scheme changes both land here.
+pub fn set_icon_style(app: &AppHandle, style: TrayIconStyle) {
+    let Some(items) = app.try_state::<TrayMenuItems>() else {
+        return;
+    };
+    let art = tray_art(style, std::env::consts::OS, panel_is_dark);
+    // Not held while Tauri dispatches the change to the main thread.
+    match items.art.lock() {
+        Ok(mut applied) if *applied != Some(art) => *applied = Some(art),
+        _ => return,
+    }
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let kind = app
+        .try_state::<environment::Environment>()
+        .map(|environment| environment.kind)
+        .unwrap_or_else(environment::kind);
+    if let Err(error) =
+        tray.set_icon_with_as_template(tray_image(app, art, kind), art == TrayArt::Template)
+    {
+        log::warn!("[tray] failed to update icon: {error}");
+        if let Ok(mut applied) = items.art.lock() {
+            *applied = None;
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_icon(app: &AppHandle) {
+    let handle = app.clone();
+    let scheduled = app.run_on_main_thread(move || {
+        if let Some(settings) = handle.try_state::<DesktopSettings>() {
+            set_icon_style(&handle, settings.tray_icon());
+        }
+    });
+    if let Err(error) = scheduled {
+        log::warn!("[tray] failed to schedule icon update: {error}");
+    }
+}
+
+/// A template image keeps only alpha, so the badge letter is cut out of it.
+fn tray_icon(icon: &Image<'_>, kind: Kind, template: bool) -> Image<'static> {
     let mut rgba = icon.rgba().to_vec();
     if kind == Kind::Dev {
         // Draw an amber D badge in the bottom-right corner, using a 32px grid
@@ -244,7 +343,9 @@ fn tray_icon(icon: &Image<'_>, kind: Kind) -> Image<'static> {
                 let is_letter = (22..27).contains(&bx)
                     && (21..28).contains(&by)
                     && letter[(by - 21) as usize] & (1 << (26 - bx)) != 0;
-                let color = if is_letter {
+                let color = if is_letter && template {
+                    [0, 0, 0, 0]
+                } else if is_letter {
                     [24, 24, 24, 255]
                 } else {
                     [245, 158, 11, 255]
@@ -606,9 +707,9 @@ mod tests {
         for size in [16, 32, 128, 512] {
             let icon = Image::new_owned(vec![255; size * size * 4], size as u32, size as u32);
             for kind in [Kind::Release, Kind::Test] {
-                assert_eq!(tray_icon(&icon, kind).rgba(), icon.rgba());
+                assert_eq!(tray_icon(&icon, kind, false).rgba(), icon.rgba());
             }
-            let dev = tray_icon(&icon, Kind::Dev);
+            let dev = tray_icon(&icon, Kind::Dev, false);
             assert_eq!((dev.width(), dev.height()), (icon.width(), icon.height()));
             let pixel = |x: usize, y: usize| {
                 let offset = (y * size / 32 * size + x * size / 32) * 4;
@@ -618,6 +719,41 @@ mod tests {
             assert_eq!(pixel(16, 24), [255; 4]);
             assert_eq!(pixel(30, 30), [245, 158, 11, 255]);
             assert_eq!(pixel(22, 24), [24, 24, 24, 255]);
+            let template = tray_icon(&icon, Kind::Dev, true);
+            let offset = (24 * size / 32 * size + 22 * size / 32) * 4;
+            assert_eq!(template.rgba()[offset + 3], 0);
+        }
+    }
+
+    #[test]
+    fn automatic_tray_icon_follows_the_platform_and_choices_override_it() {
+        let unasked = || -> bool { panic!("only Linux guesses the panel colour") };
+        assert_eq!(
+            tray_art(TrayIconStyle::Automatic, "windows", unasked),
+            TrayArt::Color
+        );
+        assert_eq!(
+            tray_art(TrayIconStyle::Automatic, "macos", unasked),
+            TrayArt::Template
+        );
+        assert_eq!(
+            tray_art(TrayIconStyle::Automatic, "linux", || true),
+            TrayArt::Light
+        );
+        assert_eq!(
+            tray_art(TrayIconStyle::Automatic, "linux", || false),
+            TrayArt::Dark
+        );
+        for os in ["windows", "macos", "linux"] {
+            assert_eq!(tray_art(TrayIconStyle::Color, os, unasked), TrayArt::Color);
+            assert_eq!(
+                tray_art(TrayIconStyle::MonochromeLight, os, unasked),
+                TrayArt::Light
+            );
+            assert_eq!(
+                tray_art(TrayIconStyle::MonochromeDark, os, unasked),
+                TrayArt::Dark
+            );
         }
     }
 }

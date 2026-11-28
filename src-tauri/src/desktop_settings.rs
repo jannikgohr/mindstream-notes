@@ -46,6 +46,8 @@ struct DesktopSettingsFile {
     language_code: String,
     #[serde(default)]
     theme_mode: DesktopThemeMode,
+    #[serde(default)]
+    tray_icon: TrayIconStyle,
 }
 
 impl Default for DesktopSettingsFile {
@@ -58,6 +60,7 @@ impl Default for DesktopSettingsFile {
             custom_window_decorations: None,
             language_code: default_language_code(),
             theme_mode: DesktopThemeMode::default(),
+            tray_icon: TrayIconStyle::default(),
         }
     }
 }
@@ -94,6 +97,7 @@ pub(crate) fn backup_values(root: &std::path::Path) -> crate::error::AppResult<s
                     | "custom_window_decorations"
                     | "language_code"
                     | "theme_mode"
+                    | "tray_icon"
             )
         });
     Ok(value)
@@ -109,6 +113,7 @@ pub(crate) fn validate_backup_values(value: &serde_json::Value) -> crate::error:
                     | "custom_window_decorations"
                     | "language_code"
                     | "theme_mode"
+                    | "tray_icon"
             )
         })
     }) {
@@ -165,12 +170,24 @@ pub enum DesktopThemeMode {
     System,
 }
 
+/// Light and dark name the icon's colour. The labels name the mode it suits.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TrayIconStyle {
+    #[default]
+    Automatic,
+    Color,
+    MonochromeLight,
+    MonochromeDark,
+}
+
 pub struct DesktopSettings {
     close_to_tray: AtomicBool,
     start_in_tray: AtomicBool,
     custom_window_decorations: AtomicBool,
     language_code: Mutex<String>,
     theme_mode: Mutex<DesktopThemeMode>,
+    tray_icon: Mutex<TrayIconStyle>,
     path: PathBuf,
 }
 
@@ -227,6 +244,9 @@ impl DesktopSettings {
         }
         if let Ok(mut mode) = self.theme_mode.lock() {
             *mode = file.theme_mode;
+        }
+        if let Ok(mut style) = self.tray_icon.lock() {
+            *style = file.tray_icon;
         }
         Ok(file)
     }
@@ -311,6 +331,7 @@ impl DesktopSettings {
                 i18n::normalize_language_code(&file.language_code).to_string(),
             ),
             theme_mode: Mutex::new(file.theme_mode),
+            tray_icon: Mutex::new(file.tray_icon),
             path,
         })
     }
@@ -408,6 +429,24 @@ impl DesktopSettings {
         Ok(())
     }
 
+    pub fn tray_icon(&self) -> TrayIconStyle {
+        if let Some(file) = self.current_file() {
+            return file.tray_icon;
+        }
+        self.tray_icon
+            .lock()
+            .map(|style| *style)
+            .unwrap_or_default()
+    }
+
+    fn set_tray_icon(&self, value: TrayIconStyle) -> CommandResult<()> {
+        self.update(|file| file.tray_icon = value)?;
+        if let Ok(mut style) = self.tray_icon.lock() {
+            *style = value;
+        }
+        Ok(())
+    }
+
     fn update(&self, patch: impl FnOnce(&mut DesktopSettingsFile)) -> CommandResult<()> {
         let parent = self.path.parent().ok_or_else(|| {
             CommandError::new(CommandErrorCode::Io, "settings path has no parent")
@@ -499,6 +538,7 @@ pub fn refresh_runtime(app: &AppHandle) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     crate::native_menu::set_language(app);
     crate::tray::set_language(app, i18n::normalize_language_code(&file.language_code));
+    crate::tray::set_icon_style(app, file.tray_icon);
     app.emit(AppEvent::CustomWindowDecorationsChanged.as_str(), custom)?;
     app.emit(AppEvent::DesktopSettingsChanged.as_str(), ())?;
     decorations
@@ -584,6 +624,21 @@ pub fn set_desktop_theme_mode(
     mode: DesktopThemeMode,
 ) -> CommandResult<()> {
     settings.set_theme_mode(mode)?;
+    changed(&app)
+}
+
+#[tauri::command]
+pub fn get_tray_icon(settings: State<'_, DesktopSettings>) -> TrayIconStyle {
+    settings.tray_icon()
+}
+
+#[tauri::command]
+pub fn set_tray_icon(
+    app: AppHandle,
+    settings: State<'_, DesktopSettings>,
+    style: TrayIconStyle,
+) -> CommandResult<()> {
+    settings.set_tray_icon(style)?;
     changed(&app)
 }
 
@@ -834,9 +889,17 @@ mod tests {
         let path = root.join(SETTINGS_FILE);
         let settings = DesktopSettings::load_from_path(path.clone()).unwrap();
         assert!(!settings.close_to_tray());
+        assert_eq!(settings.tray_icon(), TrayIconStyle::Automatic);
         settings.set_close_to_tray(true).unwrap();
-        let loaded = DesktopSettings::load_from_path(path).unwrap();
+        settings
+            .set_tray_icon(TrayIconStyle::MonochromeDark)
+            .unwrap();
+        let loaded = DesktopSettings::load_from_path(path.clone()).unwrap();
         assert!(loaded.close_to_tray());
+        assert_eq!(loaded.tray_icon(), TrayIconStyle::MonochromeDark);
+        assert!(String::from_utf8(fs::read(path).unwrap())
+            .unwrap()
+            .contains(r#""tray_icon": "monochromeDark""#));
         fs::remove_dir_all(root).unwrap();
     }
 

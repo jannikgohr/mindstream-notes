@@ -216,6 +216,8 @@ muda = { version = "0.19", default-features = false, features = ["gtk"] }
 # dbus link static so the binary doesn't grow a runtime dep on the
 # distro's libdbus.
 dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
+# Reads the desktop portal's colour scheme to pick the tray icon tone.
+dbus = "0.9"
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Open save-picker content URIs through Android's ContentResolver.

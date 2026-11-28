@@ -26,6 +26,49 @@ function parseDesktopThemeMode(value: unknown): DesktopThemeMode {
   return value;
 }
 
+/** Light and dark name the icon's colour. The labels name the mode it suits. */
+export enum TrayIconStyle {
+  Automatic = 'automatic',
+  Color = 'color',
+  MonochromeLight = 'monochromeLight',
+  MonochromeDark = 'monochromeDark'
+}
+
+export function isTrayIconStyle(value: unknown): value is TrayIconStyle {
+  return (
+    typeof value === 'string' &&
+    (Object.values(TrayIconStyle) as string[]).includes(value)
+  );
+}
+
+function parseTrayIconStyle(value: unknown): TrayIconStyle {
+  if (!isTrayIconStyle(value)) {
+    throw new Error(
+      'tray icon must be automatic, color, monochromeLight, or monochromeDark'
+    );
+  }
+  return value;
+}
+
+export function getTrayIcon(): Promise<TrayIconStyle> {
+  return invokeOrFallback<TrayIconStyle>(
+    TauriCommandName.GetTrayIcon,
+    undefined,
+    () => TrayIconStyle.Automatic,
+    parseTrayIconStyle
+  );
+}
+
+export function setTrayIcon(style: TrayIconStyle): Promise<void> {
+  parseTrayIconStyle(style);
+  return invokeOrFallback<void>(
+    TauriCommandName.SetTrayIcon,
+    { style },
+    () => undefined,
+    (response) => assertVoid(response, 'set_tray_icon response')
+  );
+}
+
 export function getCloseToTray(): Promise<boolean> {
   return invokeOrFallback<boolean>(
     TauriCommandName.GetCloseToTray,

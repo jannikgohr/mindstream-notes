@@ -9,6 +9,7 @@ import {
   tUiFormat,
   tValue
 } from './i18n.svelte';
+import en from './i18n/en.json';
 
 afterEach(() => setLanguage('en'));
 
@@ -49,6 +50,24 @@ describe('lookups', () => {
 
   it('tDescription is undefined for an unknown id', () => {
     expect(tDescription('categories', 'no.such.category')).toBeUndefined();
+  });
+
+  it('tDescription prefers the text for the current platform', () => {
+    const entry = en.settings['general.trayIcon'];
+    const agent = vi.spyOn(navigator, 'userAgent', 'get');
+    agent.mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+    expect(tDescription('settings', 'general.trayIcon')).toBe(
+      entry.descriptionByPlatform.windows
+    );
+    agent.mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)');
+    expect(tDescription('settings', 'general.trayIcon')).toBe(
+      entry.descriptionByPlatform.linux
+    );
+    agent.mockReturnValue('Mozilla/5.0 (Linux; Android 14)');
+    expect(tDescription('settings', 'general.trayIcon')).toBe(
+      entry.description
+    );
+    agent.mockRestore();
   });
 });
 

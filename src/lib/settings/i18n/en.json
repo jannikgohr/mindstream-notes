@@ -1624,6 +1624,15 @@
       "label": "Start in system tray",
       "description": "When launched by your system at login, start hidden in the tray instead of opening the window."
     },
+    "general.trayIcon": {
+      "label": "Tray icon",
+      "description": "Automatic picks the icon that suits your system.",
+      "descriptionByPlatform": {
+        "windows": "Automatic uses the colour icon.",
+        "macos": "Automatic matches the menu bar's light or dark look.",
+        "linux": "Automatic follows your light or dark mode. GNOME's top bar stays dark in light mode too."
+      }
+    },
     "general.previewTabs": {
       "label": "Preview tabs",
       "description": "A single click opens a note in an italic preview tab. The next note you open that way in the same pane replaces it. Edit the note or double-click it to keep the tab."
@@ -1916,6 +1925,10 @@
     "general.vaultOpening.ask": "Ask every time",
     "general.vaultOpening.thisWindow": "This window",
     "general.vaultOpening.newWindow": "New window",
+    "general.trayIcon.automatic": "Automatic",
+    "general.trayIcon.color": "Colour",
+    "general.trayIcon.monochromeLight": "Dark mode",
+    "general.trayIcon.monochromeDark": "Light mode",
     "hotkeys.preset.mindstream": "Mindstream defaults",
     "hotkeys.preset.notion": "Notion-like",
     "hotkeys.preset.google-docs": "Google Docs-like"

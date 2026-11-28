@@ -9,7 +9,7 @@
  * registered component by `customId`; same for action buttons via `actionId`.
  */
 
-import type { PlatformFilter } from '$lib/platform';
+import type { Platform, PlatformFilter } from '$lib/platform';
 
 /** Where the setting is persisted. V = per-vault, D = per-device. */
 export type SettingScope = 'V' | 'D';
@@ -202,6 +202,13 @@ export interface SettingsSchema {
  * Translation bundle. Same shape for every language; keys are stable so a
  * new bundle just translates the strings.
  */
+export interface I18nEntry {
+  label: string;
+  description?: string;
+  /** Replaces `description` on these platforms, for text that only fits one OS. */
+  descriptionByPlatform?: Partial<Record<Platform, string>>;
+}
+
 export interface I18nBundle {
   language: string;
   /**
@@ -213,8 +220,8 @@ export interface I18nBundle {
    * components.
    */
   ui: Record<string, string>;
-  categories: Record<string, { label: string; description?: string }>;
-  sections: Record<string, { label: string; description?: string }>;
-  settings: Record<string, { label: string; description?: string }>;
+  categories: Record<string, I18nEntry>;
+  sections: Record<string, I18nEntry>;
+  settings: Record<string, I18nEntry>;
   values: Record<string, string>;
 }

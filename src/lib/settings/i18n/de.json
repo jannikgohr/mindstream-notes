@@ -1618,6 +1618,15 @@
       "label": "In Systemablage starten",
       "description": "Wenn das System die App bei der Anmeldung startet, wird sie ausgeblendet in der Systemablage geöffnet."
     },
+    "general.trayIcon": {
+      "label": "Symbol in der Systemablage",
+      "description": "Automatisch wählt das Symbol, das zu deinem System passt.",
+      "descriptionByPlatform": {
+        "windows": "Automatisch zeigt das farbige Symbol.",
+        "macos": "Automatisch passt sich dem hellen oder dunklen Aussehen der Menüleiste an.",
+        "linux": "Automatisch folgt deinem hellen oder dunklen Modus. Die obere Leiste von GNOME bleibt auch im hellen Modus dunkel."
+      }
+    },
     "general.previewTabs": {
       "label": "Vorschau-Tabs",
       "description": "Ein einfacher Klick öffnet eine Notiz in einem kursiven Vorschau-Tab. Die nächste so geöffnete Notiz im selben Bereich ersetzt ihn. Bearbeite die Notiz oder doppelklicke sie, um den Tab zu behalten."
@@ -1916,6 +1925,10 @@
     "general.vaultOpening.ask": "Jedes Mal fragen",
     "general.vaultOpening.thisWindow": "Dieses Fenster",
     "general.vaultOpening.newWindow": "Neues Fenster",
+    "general.trayIcon.automatic": "Automatisch",
+    "general.trayIcon.color": "Farbig",
+    "general.trayIcon.monochromeLight": "Dunkler Modus",
+    "general.trayIcon.monochromeDark": "Heller Modus",
     "hotkeys.preset.mindstream": "Mindstream-Standard",
     "hotkeys.preset.notion": "Wie in Notion",
     "hotkeys.preset.google-docs": "Wie in Google Docs"

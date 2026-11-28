@@ -1,4 +1,5 @@
-import type { I18nBundle } from './types';
+import { getPlatform } from '$lib/platform';
+import type { I18nBundle, I18nEntry } from './types';
 
 // Statically import every JSON bundle in i18n/. Adding a translation is
 // "drop a new JSON file in this folder", no other wiring needed.
@@ -81,9 +82,13 @@ export function tDescription(
   scope: 'categories' | 'sections' | 'settings',
   id: string
 ): string | undefined {
+  const platform = getPlatform();
+  const pick = (entry: I18nEntry | undefined) =>
+    (platform ? entry?.descriptionByPlatform?.[platform] : undefined) ??
+    entry?.description;
   return (
-    i18n.bundle[scope]?.[id]?.description ??
-    FALLBACK[scope]?.[id]?.description ??
+    pick(i18n.bundle[scope]?.[id]) ??
+    pick(FALLBACK[scope]?.[id]) ??
     labelResolver?.description(scope, id)
   );
 }

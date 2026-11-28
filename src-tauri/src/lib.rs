@@ -222,11 +222,11 @@ pub fn run() {
             android_logger::Config::default()
                 .with_max_level(level)
                 // The socket library traces its handshake, and the change
-                // feed's handshake carries the session token. See the same
-                // rule for the desktop logger below.
+                // feed's handshake carries the session token. The plugin
+                // compiler floods trace. See the desktop logger below.
                 .with_filter(
                     android_logger::FilterBuilder::new()
-                        .parse("trace,tungstenite=warn,tokio_tungstenite=warn")
+                        .parse("trace,tungstenite=warn,tokio_tungstenite=warn,cranelift=warn,regalloc2=warn,wasmtime=warn")
                         .build(),
                 )
                 .with_tag("Mindstream"),
@@ -381,6 +381,14 @@ pub fn run() {
                         .level_for("tungstenite", log::LevelFilter::Warn)
                         .level_for("tokio_tungstenite", log::LevelFilter::Warn)
                         .level_for("keyring_core", log::LevelFilter::Info)
+                        // Debug builds compile plugins at runtime. At trace,
+                        // the compiler logs every IR pass and buries the app.
+                        .level_for("cranelift_codegen", log::LevelFilter::Warn)
+                        .level_for("cranelift_frontend", log::LevelFilter::Warn)
+                        .level_for("regalloc2", log::LevelFilter::Warn)
+                        .level_for("wasmtime", log::LevelFilter::Warn)
+                        .level_for("wasmtime_environ", log::LevelFilter::Warn)
+                        .level_for("wasmtime_internal_cranelift", log::LevelFilter::Warn)
                         .targets([
                             tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                             tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
@@ -925,6 +933,10 @@ pub fn run() {
                 desktop_settings::get_start_in_tray,
                 #[cfg(desktop)]
                 desktop_settings::set_start_in_tray,
+                #[cfg(desktop)]
+                desktop_settings::get_tray_icon,
+                #[cfg(desktop)]
+                desktop_settings::set_tray_icon,
                 #[cfg(desktop)]
                 desktop_settings::get_custom_window_decorations,
                 #[cfg(desktop)]

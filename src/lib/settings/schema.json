@@ -127,6 +127,20 @@
               }
             },
             {
+              "id": "general.trayIcon",
+              "nativeOnly": true,
+              "scope": "D",
+              "type": "select",
+              "default": "automatic",
+              "options": [
+                "automatic",
+                "color",
+                "monochromeLight",
+                "monochromeDark"
+              ],
+              "platforms": ["desktop"]
+            },
+            {
               "id": "general.previewTabs",
               "scope": "D",
               "type": "toggle",

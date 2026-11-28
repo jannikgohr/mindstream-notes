@@ -456,6 +456,7 @@ describe('native-only entries', () => {
     'general.startOnLogin',
     'general.closeToTray',
     'general.startInTray',
+    'general.trayIcon',
     'appearance.customWindowDecorations',
     'hotkeys.globalShortcuts',
     'about.tauriVersion',
