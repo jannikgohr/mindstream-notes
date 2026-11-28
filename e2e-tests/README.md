@@ -118,20 +118,27 @@ flags and what the numbers do and don't cover.
 ## Large-vault benchmark
 
 Imports a vault built from Simple English Wikipedia into the browser build and
-times what grows with the vault: the import, booting with it, search, opening
-a note, and both graph views, with frame times while the graph moves.
+times what grows with the vault: the import, cold starts with it, search,
+opening a note, and both graph views, with frame times while the graph moves
+and after it settles, and the browser's memory.
 
 ```sh
 pnpm bench:vault                         # 20,000 articles, builds the app first
+pnpm bench:vault --small --skip-build    # the 28-note vault in perf/fixtures
 pnpm bench:vault --articles 2000 --skip-build --url http://localhost:1420/
-pnpm bench:vault --json out.json --profile graph.cpuprofile
+pnpm bench:vault --json out.json --profile graph.cpuprofile --headed
 ```
 
 [perf/wikipedia/make-vault.mjs](perf/wikipedia/make-vault.mjs) downloads only
 as much of the dump as the article count needs and caches the vault under
 `~/.cache/mindstream-perf`. Run headless on a machine without a GPU, Chromium
 rasterises the canvas in software, so graph frame times there say more about
-the machine than the app; `--profile` separates the app's own time from it.
+the machine than the app; `--profile` separates the app's own time from it,
+and `--headed` uses the GPU where there is one. Memory (PSS) is only read on
+Linux.
+
+[perf/competitors](perf/competitors/README.md) runs Obsidian, Joplin and
+Logseq through the same steps on the same vaults.
 
 ## Going deeper
 
