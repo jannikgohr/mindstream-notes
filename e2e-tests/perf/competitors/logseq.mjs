@@ -117,8 +117,9 @@ const ready = (name) =>
     '#main-content-container .ls-block, #main-content-container .ls-page-title'
   );
 
-let logseq = await start();
+let logseq;
 try {
+  logseq = await start();
   let page = logseq.page;
   results.gpu = await gpu(page);
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -252,7 +253,7 @@ try {
     await save(results, values, name);
   }
 } finally {
-  await logseq.close();
+  await logseq?.close();
   await rm(work, { recursive: true, force: true });
   if (dotLogseq) await rm(dotLogseq, { recursive: true, force: true });
 }

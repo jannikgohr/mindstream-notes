@@ -48,8 +48,9 @@ as it did on every Wikipedia vault on Linux.
 | Obsidian default (237,705 / 799,310)        |     2.13 s | not after 300 s |           24 |             28 | 3, zoom 3          | 5.3 GB |
 
 The 0.8–1.2 s zoom stalls of the Linux run are gone: no zoom sample of
-Mindstream's recorded a long task, and its slowest frame took 24 ms. They
-were software rasterisation, not our code. Obsidian's zoom after settling
+Mindstream's recorded a long task, and its slowest frame took 24 ms. The
+machine, OS and browser runtime all changed between the runs, so this
+doesn't prove the cause, but software rasterisation is the likely one. Obsidian's zoom after settling
 still spends about 2.2 s of each 2 s sample in long tasks (the sample ends
 on a late frame), with 390–670 ms frames.
 
@@ -75,10 +76,10 @@ Mindstream's search includes its 100 ms debounce.
 - **Memory leads hold and grow**: on the 20k vault the desktop app idles at
   about a quarter of Obsidian's memory, and uses an eighth of it with the
   matched graph open.
-- **Search and the local graph are still where we trail.** They are as slow
-  in the desktop app as in the web build: 956 ms of the desktop app's
-  1.19 s search is the `search_notes` command, and 485 ms of its local graph
-  is `list_note_links`. Both builds rank search hits with the same
+- **Search and the local graph are still where we trail.** The desktop app
+  is about a quarter faster at both than the web build, and still 3–9×
+  slower than Obsidian: 956 ms of its 1.19 s search is the `search_notes`
+  command, and 485 ms of its local graph is `list_note_links`. Both builds rank search hits with the same
   `rank_candidates` in `storage-core`, so the fixes named in the Linux doc
   apply to both.
 - **Small fixed costs are gone on the desktop app**: at 28 notes it matches
@@ -98,9 +99,9 @@ the commands themselves. Worth a profile before the next run.
 
 ## Caveats
 
-- The Electron apps' windows are 1600×1000 from their command line; the
-  desktop app's window opens at its default size and the page is resized to
-  1600×1000 through the DevTools protocol, as the browser build's is.
+- Chromium, Obsidian and Logseq open 1600×1000 windows from their command
+  line. Joplin and the desktop app open at their default size. Every page is
+  then set to 1600×1000 through the DevTools protocol.
 - Joplin's window can't be told to keep drawing while covered; its numbers
   assume nothing covered it. Its plain Markdown importer keeps
   front matter as text, so it imported no tags. Logseq got paragraphs turned
