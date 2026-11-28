@@ -15,6 +15,7 @@
  * live) and persists to the backend when available.
  */
 
+import { pluginEventsForget } from '$lib/api/plugin-events';
 import { isTauri } from '$lib/api/core';
 import {
   pluginsApprove,
@@ -28,6 +29,7 @@ import { loadPlugins, saveBrowserPluginEnabled } from './load';
 import { SOURCE_BUILTIN } from './source';
 import {
   allPlugins,
+  pluginById,
   pluginLoadError,
   setPluginEnabled,
   unregisterPlugin
@@ -172,6 +174,12 @@ export async function setPluginEnabledAdmin(
   setPluginEnabled(id, enabled);
   if (!isTauri()) {
     saveBrowserPluginEnabled(id, enabled);
+    // As the backend does: a disabled plugin starts over when enabled again.
+    // A tab without the vault cannot, which only means a repeat later.
+    if (!enabled && pluginById(id)?.manifest.contributes.noteEvents?.length)
+      await pluginEventsForget(id).catch((err) =>
+        console.debug('[plugins] could not forget note events', err)
+      );
     return;
   }
   try {

@@ -47,6 +47,7 @@
   import { onAppClose } from '$lib/editor/suspend-flush';
   import { sanitizeDockBlob } from '$lib/desktop/dock-layout-restore';
   import { startPdfSearchIndexing } from '$lib/pdf/search-index-backfill';
+  import { startNoteEvents } from '$lib/plugins/note-events';
   import { pruneHistoryOnStartup } from '$lib/history/retention';
   import { listen, TauriEventName } from '$lib/api/events';
   import {
@@ -431,6 +432,7 @@
     // Backfill PDF search text for any un-indexed PDFs (synced-in / pre-feature)
     // in the background so their content becomes searchable without opening them.
     startPdfSearchIndexing();
+    startNoteEvents();
     // Sweep note history past the user's retention window.
     void pruneHistoryOnStartup();
   }

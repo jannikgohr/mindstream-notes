@@ -6,8 +6,8 @@ use serde_json::{json, Value};
 
 use crate::error::{AppError, AppResult};
 use crate::{
-    assets, collections, content_stats, demo_notes, history, note_links, notes, search, signatures,
-    tree_batch,
+    assets, collections, content_stats, demo_notes, history, note_events, note_links, notes,
+    search, signatures, tree_batch,
 };
 
 #[derive(Deserialize)]
@@ -135,6 +135,23 @@ pub enum VaultRequest {
         note_id: String,
         yrs_state: Vec<u8>,
     },
+    PluginEventsPending {
+        plugin_id: String,
+        export: String,
+        settings: Value,
+        note_kinds: Option<Vec<String>>,
+        settle_ms: u32,
+        limit: u32,
+    },
+    PluginEventsCommit {
+        plugin_id: String,
+        export: String,
+        generation: String,
+        revision: i64,
+    },
+    PluginEventsForget {
+        plugin_id: String,
+    },
 }
 
 fn result<T: Serialize>(value: T) -> AppResult<Value> {
@@ -240,6 +257,35 @@ pub fn dispatch(conn: &mut Connection, request: VaultRequest) -> AppResult<Value
         TrashCounts {} => result(crate::trash::counts(conn)?),
         EmptyTrash {} => result(crate::trash::empty(conn)?),
         PdfNotesMissingText {} => result(crate::pdf_text::notes_missing_text(conn)?),
+        PluginEventsPending {
+            plugin_id,
+            export,
+            settings,
+            note_kinds,
+            settle_ms,
+            limit,
+        } => result(note_events::pending(
+            conn,
+            &plugin_id,
+            &export,
+            &settings,
+            note_kinds.as_deref(),
+            settle_ms,
+            limit,
+        )?),
+        PluginEventsCommit {
+            plugin_id,
+            export,
+            generation,
+            revision,
+        } => result(note_events::commit(
+            conn,
+            &plugin_id,
+            &export,
+            &generation,
+            revision,
+        )?),
+        PluginEventsForget { plugin_id } => result(note_events::forget(conn, &plugin_id)?),
         PdfNoteNeedsText { note_id } => result(crate::pdf_text::note_needs_text(conn, &note_id)?),
         SetPdfText {
             note_id,

@@ -1016,6 +1016,7 @@
     "plugins.permissions.none": "Keine besonderen Berechtigungen",
     "plugins.permission.notes.create": "Notizen aus seinen Vorlagen erstellen",
     "plugins.permission.notes.read": "Metadaten deiner Notizen lesen (Titel, Tags, Ordner)",
+    "plugins.permission.notes.watch": "Erfahren, wenn sich Notizen ändern",
     "plugins.permission.pluginArtifacts.download": "Verifizierte Plugin-Artefakte herunterladen",
     "plugins.permission.pluginStorage.read": "Isolierte Plugin-Daten lesen",
     "plugins.permission.pluginStorage.write": "Isolierte Plugin-Daten schreiben",

@@ -23,6 +23,10 @@ const { loadPlugins, saveBrowserPluginEnabled } = vi.hoisted(() => ({
   saveBrowserPluginEnabled: vi.fn()
 }));
 vi.mock('./load', () => ({ loadPlugins, saveBrowserPluginEnabled }));
+const forgetNoteEvents = vi.hoisted(() => vi.fn());
+vi.mock('$lib/api/plugin-events', () => ({
+  pluginEventsForget: forgetNoteEvents
+}));
 
 import { registerPlugin, resetPluginRegistry } from './registry.svelte';
 import {
@@ -130,6 +134,32 @@ describe('pluginOverview', () => {
       'com.a.plugin',
       false
     );
+  });
+});
+
+describe('disabling a note event subscriber in the browser', () => {
+  it('forgets its cursor, and a tab without the vault still disables it', async () => {
+    noSettings('com.b.plugin');
+    registerPlugin({
+      manifestVersion: 2,
+      id: 'com.a.watcher',
+      name: 'Watcher',
+      version: '1.0.0',
+      runtime: 'wasm',
+      entry: 'plugin.wasm',
+      permissions: ['notes.watch'],
+      contributes: {
+        noteEvents: [{ on: 'note.changed', export: 'noteChanged' }]
+      }
+    });
+    forgetNoteEvents.mockRejectedValue(new Error('vault not ready'));
+    await setPluginEnabledAdmin('com.b.plugin', false);
+    expect(forgetNoteEvents).not.toHaveBeenCalled();
+    await setPluginEnabledAdmin('com.a.watcher', false);
+    expect(forgetNoteEvents).toHaveBeenCalledWith('com.a.watcher');
+    expect(
+      pluginOverview().find((e) => e.id === 'com.a.watcher')?.enabled
+    ).toBe(false);
   });
 });
 

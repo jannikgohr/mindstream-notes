@@ -645,6 +645,7 @@ pub fn run() {
             // restored `data.trashRetentionDays` value.
             app.manage(data::TrashRetentionScheduler::new());
             data::spawn_retention_sweep(app.handle().clone());
+            plugins::events::spawn(app.handle().clone());
 
             // Registry of long-lived plugin preview servers (e.g. `tinymist
             // preview`). Reaped on exit below so nothing is orphaned.
