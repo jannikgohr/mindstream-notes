@@ -34,7 +34,7 @@ fn menu_rows(app: &AppHandle, items: &TrayMenuItems) -> tauri::Result<Vec<Row>> 
             false,
             include_bytes!("../../icons/32x32.png"),
         );
-        entry.image = super::tray_icon(&entry.image, crate::environment::Kind::Dev);
+        entry.image = super::tray_icon(&entry.image, crate::environment::Kind::Dev, false);
         rows.push(entry);
     }
     rows.push(row(

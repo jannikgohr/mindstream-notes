@@ -19,13 +19,17 @@ import {
   getDesktopThemeMode,
   getStartInTray,
   getStartOnLogin,
+  getTrayIcon,
   isDesktopThemeMode,
+  isTrayIconStyle,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
   setDesktopThemeMode,
   setStartInTray,
-  setStartOnLogin
+  setStartOnLogin,
+  setTrayIcon,
+  TrayIconStyle
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 import { splitAvailable } from '$lib/editor/source/split-available.svelte';
@@ -101,6 +105,20 @@ export const SETTING_BINDINGS: Record<string, Binding> = {
     set: async (v) => {
       if (!isTauri() || isMobile()) return;
       await setStartInTray(v === true);
+    }
+  },
+  'general.trayIcon': {
+    document: 'desktop',
+    get: async () =>
+      isTauri() && !isMobile() ? await getTrayIcon() : TrayIconStyle.Automatic,
+    set: async (v) => {
+      if (!isTrayIconStyle(v)) {
+        throw new Error(
+          'general.trayIcon must be automatic, color, monochromeLight, or monochromeDark'
+        );
+      }
+      if (!isTauri() || isMobile()) return;
+      await setTrayIcon(v);
     }
   },
   'appearance.customWindowDecorations': {

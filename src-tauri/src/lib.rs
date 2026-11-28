@@ -926,6 +926,10 @@ pub fn run() {
                 #[cfg(desktop)]
                 desktop_settings::set_start_in_tray,
                 #[cfg(desktop)]
+                desktop_settings::get_tray_icon,
+                #[cfg(desktop)]
+                desktop_settings::set_tray_icon,
+                #[cfg(desktop)]
                 desktop_settings::get_custom_window_decorations,
                 #[cfg(desktop)]
                 desktop_settings::set_custom_window_decorations,
