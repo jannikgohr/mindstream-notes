@@ -15,12 +15,15 @@ import {
   getDesktopThemeMode,
   getStartInTray,
   getStartOnLogin,
+  getTrayIcon,
   setCloseToTray,
   setCustomWindowDecorations,
   setDesktopLanguage,
   setDesktopThemeMode,
   setStartInTray,
-  setStartOnLogin
+  setStartOnLogin,
+  setTrayIcon,
+  TrayIconStyle
 } from '$lib/api/desktop-settings';
 import { isTauri } from '$lib/api/core';
 
@@ -43,6 +46,8 @@ vi.mock('$lib/api/desktop-settings', async (importOriginal) => ({
   getStartOnLogin: vi.fn(),
   setStartInTray: vi.fn(),
   setStartOnLogin: vi.fn(),
+  getTrayIcon: vi.fn(),
+  setTrayIcon: vi.fn(),
   getDesktopThemeMode: vi.fn(),
   setDesktopThemeMode: vi.fn(),
   getDesktopLanguage: vi.fn(),
@@ -107,6 +112,12 @@ describe('SETTING_BINDINGS — desktop-gated entries are inert off-Tauri', () =>
     expect(await SETTING_BINDINGS['general.startInTray'].get()).toBe(false);
     await SETTING_BINDINGS['general.closeToTray'].set(true);
     await SETTING_BINDINGS['general.startInTray'].set(true);
+  });
+
+  it('trayIcon reports automatic off-Tauri and writes nothing', async () => {
+    expect(await SETTING_BINDINGS['general.trayIcon'].get()).toBe('automatic');
+    await SETTING_BINDINGS['general.trayIcon'].set('monochromeDark');
+    expect(setTrayIcon).not.toHaveBeenCalled();
   });
 });
 
@@ -219,6 +230,8 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     vi.mocked(setCloseToTray).mockResolvedValue(undefined);
     vi.mocked(getStartInTray).mockResolvedValue(true);
     vi.mocked(setStartInTray).mockResolvedValue(undefined);
+    vi.mocked(getTrayIcon).mockResolvedValue(TrayIconStyle.MonochromeLight);
+    vi.mocked(setTrayIcon).mockResolvedValue(undefined);
     vi.mocked(getDesktopThemeMode).mockResolvedValue(DesktopThemeMode.Dark);
     vi.mocked(setDesktopThemeMode).mockResolvedValue(undefined);
     vi.mocked(getDesktopLanguage).mockResolvedValue('de');
@@ -243,6 +256,17 @@ describe('SETTING_BINDINGS — Tauri (desktop) branches', () => {
     await SETTING_BINDINGS['general.startInTray'].set(true);
     expect(setStartInTray).toHaveBeenCalledWith(true);
     expect(setStartOnLogin).not.toHaveBeenCalled();
+  });
+
+  it('trayIcon round-trips through desktop settings and rejects unknown styles', async () => {
+    expect(await SETTING_BINDINGS['general.trayIcon'].get()).toBe(
+      'monochromeLight'
+    );
+    await SETTING_BINDINGS['general.trayIcon'].set('color');
+    expect(setTrayIcon).toHaveBeenCalledWith('color');
+    await expect(
+      SETTING_BINDINGS['general.trayIcon'].set('rainbow')
+    ).rejects.toThrow(/automatic, color/);
   });
 
   it('appearance.mode reads the desktop theme and persists a change', async () => {

@@ -160,6 +160,7 @@ fn native_tray_menu_exports_icons_accelerators_actions_and_renamed_vault() {
         new_ink: state.new_ink.clone(),
         new_diagram: state.new_diagram.clone(),
         quit: state.quit.clone(),
+        art: std::sync::Mutex::new(None),
     };
     let dev_snapshot = || build_menu(app.handle(), menu_rows(app.handle(), &dev).unwrap());
     let items = entries(&dev_snapshot());

@@ -95,6 +95,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   get_hotkey_display: 'read',
   get_start_in_tray: 'read',
   get_start_on_login: 'read',
+  get_tray_icon: 'read',
   get_global_shortcut_status: 'read',
   // Reads the cached text; with a `text` argument it stores it instead, see
   // `commandWrites`.
@@ -228,6 +229,7 @@ const COMMAND_ACCESS: Record<`${TauriCommandName}`, CommandAccess> = {
   set_pdf_text: 'write',
   set_start_in_tray: 'write',
   set_start_on_login: 'write',
+  set_tray_icon: 'write',
   // Starts scheduled syncs, which write the vault.
   set_sync_schedule: 'write',
   set_trash_retention: 'write',
