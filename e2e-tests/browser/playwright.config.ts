@@ -14,9 +14,8 @@ import { fileURLToPath } from 'node:url';
  * (vitest coverage shows them at 0%), which is exactly where the unit
  * suite stops paying off.
  *
- * Port 1440 is deliberately neither Vite's dev port (1420) nor the
- * `.claude/launch.json` preview port (1430), so an e2e run never fights
- * a dev server the developer already has open.
+ * Port 1440 is deliberately not Vite's dev port (1420), so an e2e run
+ * never fights a dev server the developer already has open.
  *
  * The web server builds the SPA and serves it with `vite preview` rather
  * than `vite dev`: prebuilt static assets load deterministically, so the

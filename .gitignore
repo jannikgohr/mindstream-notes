@@ -59,3 +59,6 @@ src-tauri/scripts/__pycache__/
 
 # Generated browser SQLite proof bindings.
 /static/browser-wasm/
+
+# Agent tooling
+/.claude/
