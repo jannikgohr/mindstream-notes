@@ -158,6 +158,7 @@ export async function importPdfIn(
   parentId: string | null,
   file: File
 ): Promise<string> {
+  const tags = tagsForNewNote();
   const raw = new Uint8Array(await file.arrayBuffer());
   const title =
     file.name.replace(/\.pdf$/i, '').trim() ||
@@ -167,7 +168,7 @@ export async function importPdfIn(
     title,
     bytes: raw
   });
-  const note = await withTags(imported, tagsForNewNote());
+  const note = await withTags(imported, tags);
   await applyNoteSummary(note);
   // Index the PDF's text for cross-note search. Derived/local-only, so it
   // runs off the import path and failures are non-fatal (the background
@@ -547,7 +548,6 @@ function renameNode(nodes: TreeNode[], id: string, name: string): TreeNode[] {
   return nodes;
 }
 
-/** Apply the command result without fetching every note and tag in the vault. */
 // Tagged before the note reaches the tree, so it never blinks out of a
 // filtered view, and before the first sync, which pushes it tagged.
 async function withTags(
@@ -558,6 +558,7 @@ async function withTags(
   return api.saveNote({ id: note.id, tags: normalizeTags([...tags]) });
 }
 
+/** Apply the command result without fetching every note and tag in the vault. */
 async function applyNoteSummary(note: api.Note): Promise<void> {
   const {
     body: _body,

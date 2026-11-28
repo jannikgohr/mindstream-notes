@@ -361,9 +361,11 @@ describe('createNoteIn / importPdfIn', () => {
       expect(tree.notesById[id].tags).toEqual(['work', 'home']);
     });
 
-    it('tags an imported PDF', async () => {
+    it('tags an imported PDF with the filter it was dropped under', async () => {
       const file = new File([new Uint8Array([1])], 'Paper.pdf');
-      const id = await importPdfIn(null, file);
+      const importing = importPdfIn(null, file);
+      tagFilter.tags = ['elsewhere'];
+      const id = await importing;
       expect(tree.notesById[id].tags).toEqual(['work', 'home']);
     });
 
