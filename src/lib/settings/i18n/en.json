@@ -1626,11 +1626,11 @@
     },
     "general.trayIcon": {
       "label": "Tray icon",
-      "description": "Light and dark name the icon's colour, so pick light for a dark panel.",
+      "description": "Automatic picks the icon that suits your system.",
       "descriptionByPlatform": {
-        "windows": "Automatic uses the colour icon. Light and dark name the icon's colour, so pick light for a dark taskbar.",
-        "macos": "Automatic matches the menu bar's light or dark look. Light and dark name the icon's colour.",
-        "linux": "Automatic follows your light or dark mode. Light and dark name the icon's colour, so pick light for a dark panel."
+        "windows": "Automatic uses the colour icon.",
+        "macos": "Automatic matches the menu bar's light or dark look.",
+        "linux": "Automatic follows your light or dark mode. GNOME's top bar stays dark in light mode too."
       }
     },
     "general.previewTabs": {
@@ -1927,8 +1927,8 @@
     "general.vaultOpening.newWindow": "New window",
     "general.trayIcon.automatic": "Automatic",
     "general.trayIcon.color": "Colour",
-    "general.trayIcon.monochromeLight": "Monochrome light",
-    "general.trayIcon.monochromeDark": "Monochrome dark",
+    "general.trayIcon.monochromeLight": "Dark mode",
+    "general.trayIcon.monochromeDark": "Light mode",
     "hotkeys.preset.mindstream": "Mindstream defaults",
     "hotkeys.preset.notion": "Notion-like",
     "hotkeys.preset.google-docs": "Google Docs-like"

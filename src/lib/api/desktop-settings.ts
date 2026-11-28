@@ -26,7 +26,7 @@ function parseDesktopThemeMode(value: unknown): DesktopThemeMode {
   return value;
 }
 
-/** Light and dark name the icon's colour, not the panel it suits. */
+/** Light and dark name the icon's colour. The labels name the mode it suits. */
 export enum TrayIconStyle {
   Automatic = 'automatic',
   Color = 'color',
