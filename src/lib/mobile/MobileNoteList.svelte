@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { tUi, tUiFormat } from '$lib/settings/i18n.svelte';
   /**
    * Note browser body: filters the tree by the active view + folder,
@@ -48,6 +49,11 @@
   import { ui } from '$lib/state.svelte';
   import { sortTree } from '$lib/sort';
   import { nodesForDesktopSource } from '$lib/stores/note-source.svelte';
+  import {
+    clearTagFilter,
+    filterNodesByTags,
+    tagFilter
+  } from '$lib/stores/tag-filter.svelte';
   import ContextMenu from '$lib/components/ContextMenu.svelte';
   import type { MenuItem } from '$lib/components/context-menu-types';
   import { alert, confirm } from '$lib/components/confirm-dialog.svelte';
@@ -179,7 +185,18 @@
   // Free-text search lives in the global SearchDialog now (mobile and
   // desktop share the Rust-backed scorer). The list itself stays a plain
   // tree view; the top-bar's search pill opens the dialog.
-  const visible = $derived<TreeNode[]>(nodes);
+  const visible = $derived<TreeNode[]>(
+    filterNodesByTags(nodes, tree.notesById, tagFilter.tags)
+  );
+  const filtering = $derived(tagFilter.tags.length > 0);
+  // A selection must not carry rows the filter hides into a batch action.
+  const filterKey = $derived(tagFilter.tags.join('\n'));
+  let selectedFilterKey = untrack(() => filterKey);
+  $effect(() => {
+    if (filterKey === selectedFilterKey) return;
+    selectedFilterKey = filterKey;
+    clearMobileBatchSelection();
+  });
   const visibleItems = $derived<MobileBatchItem[]>(
     visible.map((node) => ({ kind: node.kind, id: node.id }))
   );
@@ -192,9 +209,7 @@
   const showTrashRootActions = $derived(
     mobileState.view === 'trash' && mobileState.currentFolderId === null
   );
-  const trashRootItemCount = $derived(
-    showTrashRootActions ? visible.length : 0
-  );
+  const trashRootItemCount = $derived(showTrashRootActions ? nodes.length : 0);
   const trashRootEmpty = $derived(trashRootItemCount === 0);
 
   function previewFor(noteId: string): string {
@@ -269,6 +284,7 @@
   }
 
   function emptyStateMessage(): string {
+    if (filtering) return tUi('tagFilter.noMatches');
     switch (mobileState.view) {
       case 'shared':
         return tUi('mobile.empty.shared');
@@ -605,6 +621,15 @@
       <p class="px-1 py-6 text-center text-sm text-muted-foreground">
         {emptyStateMessage()}
       </p>
+      {#if filtering}
+        <div class="flex justify-center">
+          <button
+            type="button"
+            class="h-11 rounded-md px-4 text-sm text-accent-brand transition-colors hover:bg-accent"
+            onclick={clearTagFilter}>{tUi('tagFilter.clear')}</button
+          >
+        </div>
+      {/if}
     {:else if mobileState.displayMode === 'grid'}
       <div class="grid grid-cols-2 gap-2">
         {#each visible as node (node.kind + ':' + node.id)}
