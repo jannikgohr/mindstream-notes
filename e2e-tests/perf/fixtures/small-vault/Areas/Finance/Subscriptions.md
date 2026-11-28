@@ -1,0 +1,3 @@
+- Music, 10.99 €
+- Cloud backup, 2.99 €
+- Newspaper, 14.00 €, cancel in January?

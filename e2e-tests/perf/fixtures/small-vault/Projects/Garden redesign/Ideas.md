@@ -1,0 +1,3 @@
+- Rain barrel at the downspout
+- Small bench under the cherry tree
+- Herb spiral near the kitchen door
