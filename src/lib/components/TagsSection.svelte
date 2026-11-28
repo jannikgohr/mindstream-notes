@@ -226,7 +226,7 @@
         >
         <button
           type="button"
-          class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          class="inline-flex size-[18px] shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           aria-label={tUi('tags.remove').replace('{tag}', tag)}
           onclick={() => handleRemove(tag)}
         >
