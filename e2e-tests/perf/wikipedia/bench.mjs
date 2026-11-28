@@ -168,6 +168,16 @@ const vault = values.small
 const query = values.query ?? (values.small ? 'lisbon' : 'europe');
 if (values.native && process.platform !== 'win32')
   throw new Error('--native drives WebView2 over CDP, so Windows only');
+// A build without the test-instance seam ignores MINDSTREAM_ROOT_DIR and
+// would import into the real vault. This command exists only in one with it,
+// as e2e-tests/app/helpers/preflight.ts checks too.
+if (
+  values.native &&
+  !(await readFile(values.exe)).includes(
+    'e2e_create_standalone_collection_invite'
+  )
+)
+  throw new Error(`${values.exe} was built without --features e2e-data-dir`);
 const server =
   values.url || values.native
     ? { url: values.url, stop: () => {} }
