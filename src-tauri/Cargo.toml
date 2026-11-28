@@ -17,9 +17,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # and the pre-push hook run, covering both. The storage core is also a
 # default member so its migrated tests run with the native regression suite.
 [workspace]
-members = [".", "plugin-runtime", "plugin-fixtures", "storage-core", "browser-wasm"]
+members = [".", "plugin-runtime", "plugin-fixtures", "storage-core", "browser-wasm", "ink"]
 exclude = ["vendor/sqlite-wasm-vfs"]
-default-members = [".", "plugin-runtime", "storage-core"]
+default-members = [".", "plugin-runtime", "storage-core", "ink"]
 
 [patch.crates-io]
 # Keep the compatible 0.2 ABI and repair single-connection hot-journal recovery.
